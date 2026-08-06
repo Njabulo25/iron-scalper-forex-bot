@@ -1,9 +1,1 @@
-# ?? Iron Scraper - Forex Bot 
- 
-A modular algorithmic trading platform for XAUUSD, GBPUSD, and US30. 
- 
-## Features 
-- Historical data from MT5 
-- Technical indicators 
-- Backtesting with vectorbt 
-- Risk management 
+python -c "open('README.md','w').write('# Iron Scalper Forex Bot\n\n**Gold Never Rusts.**\n\nA professional algorithmic trading bot for XAUUSD (Gold) running on MetaTrader 5. Features two proven strategies with a live web dashboard.\n\n---\n\n## Risk Warning\n\nForex and CFD trading involves substantial risk of loss. Past performance does not guarantee future results. This software is for educational purposes. Only trade with money you can afford to lose.\n\n---\n\n## Strategies\n\n### Daily Breakout (The Sniper)\n- Win Rate: 80%\n- Trades: 1 per day\n- Logic: Breaks Asian range during London open\n\n### London Scalper (The Hustler)\n- Win Rate: 35%\n- Trades: 5-7 per day\n- Logic: Pullback entries during trending sessions\n\n### Combined (9-Month Backtest)\n- Total Trades: 1,460\n- Total Pips: +140,607\n- Avg Per Trade: +96 pips\n\n---\n\n## Quick Start\n\n### Prerequisites\n- Python 3.10+\n- MetaTrader 5 (with demo account)\n\n### Installation\n```bash\ngit clone https://github.com/Njabulo25/iron-scalper-forex-bot.git\ncd iron-scalper-forex-bot\npip install -r requirements.txt\n```\n\n### Download Data\n```bash\npython full_downloader.py\n```\n\n### Run Backtest\n```bash\npython backtest_final.py\n```\n\n### Launch Live Bot\n```bash\npython src/engine/web_dashboard.py\n```\nOpen http://localhost:5000\n\n---\n\n## Configuration\n\nEdit config/settings.py:\n\n| Setting | Default | Description |\n|---------|---------|-------------|\n| RISK_PER_TRADE | 0.01 | 1% risk per trade |\n| MAX_DAILY_RISK | 0.03 | Stop after 3% daily loss |\n| BREAKOUT_ENABLED | True | Enable breakout strategy |\n| SCALPER_ENABLED | True | Enable scalping strategy |\n\n---\n\n## Sharing\n\n1. Copy folder to friends PC\n2. Install Python + MT5\n3. pip install -r requirements.txt\n4. python src/engine/web_dashboard.py\n\n---\n\n## License\n\nMIT - Use at your own risk.\n\n**Gold never rusts.**\n')"
