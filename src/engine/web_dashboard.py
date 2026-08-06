@@ -183,7 +183,7 @@ HTML = r'''
     <!-- DASHBOARD PAGE -->
     <div class="page active" id="page-dashboard">
         <div class="cards">
-            <div class="card"><div class="label">Balance</div><div class="value gold-text" id="bal">$10,000</div></div>
+            <div class="card"><div class="label">Balance</div><div class="value gold-text" id="bal">$0</div></div>
             <div class="card"><div class="label">Daily P&L</div><div class="value" id="dpnl">$0</div></div>
             <div class="card"><div class="label">Total Return</div><div class="value" id="ret">0%</div></div>
             <div class="card"><div class="label">Win Rate</div><div class="value gold-text" id="wr">0%</div></div>
