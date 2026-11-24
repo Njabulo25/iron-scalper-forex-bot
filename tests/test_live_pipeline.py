@@ -5,6 +5,7 @@ paths can be checked without a terminal, a demo account or the pandas install.
 
 Run: python tests/test_live_pipeline.py
 """
+import json
 import sys
 import tempfile
 import types
@@ -138,8 +139,10 @@ def main():
     check("net USD includes swap/commission", abs((closed["profit_usd"] or 0) - 48.5) < 1e-9)
     check("risk manager got the realised P/L", abs(trader.risk_mgr.daily_pnl - 48.5) < 1e-9)
     check("DB stats are real now", database.get_trade_stats()["total_trades"] == 1)
+    trader._refresh_stats()  # exactly what the next loop pass does
     check("dashboard stats refreshed", web_state.get("total_trades") == 1 and web_state.get("win_rate") == 100.0)
     check("dashboard history populated", len(web_state.get("trade_history", [])) == 1)
+    check("dashboard exposes risk headroom", web_state.get("risk_budget") == 300.0)
 
     # 4. Re-scanning history must not double count.
     trader._check_closed_positions()
@@ -158,6 +161,50 @@ def main():
     allowed, reason = rm.can_trade()
     check("daily-loss stop fires", not allowed and "Daily loss" in reason)
 
+    # 8. The schema is created once per process, not on every query.
+    database._INITIALIZED.clear()
+    real_init = database.init_db
+    init_calls = {"n": 0}
+
+    def counted_init():
+        init_calls["n"] += 1
+        return real_init()
+
+    database.init_db = counted_init
+    for _ in range(5):
+        database.get_trade_stats()
+    database.init_db = real_init
+    check("schema initialised once, not per query", init_calls["n"] == 1)
+
+    # 9. One stats build per pass, even when a close happens in that pass.
+    fake["opening_deals"][5002] = types.SimpleNamespace(ticket=5002, position_id=9002)
+    trader.place_trade(_trade("SELL", 2000.0, 2005.0, 1990.0, 5))
+    fake["history"].append(
+        types.SimpleNamespace(
+            entry=mt5.DEAL_ENTRY_OUT, position_id=9002, order=999998,
+            price=1995.0, time=int(datetime.now().timestamp()),
+            profit=-25.0, swap=0.0, commission=-0.5,
+        )
+    )
+
+    snapshots = {"n": 0}
+    real_snapshot = live_module.get_dashboard_snapshot
+
+    def counted_snapshot(limit=60):
+        snapshots["n"] += 1
+        return real_snapshot(limit)
+
+    live_module.get_dashboard_snapshot = counted_snapshot
+    trader.get_data = lambda *a, **k: object()
+    trader._generate_signals = lambda df: []
+    trader._stop = False
+    live_module.time.sleep = lambda seconds: setattr(trader, "_stop", True)
+    trader.run_web()
+    live_module.get_dashboard_snapshot = real_snapshot
+
+    check("one stats build per pass", snapshots["n"] == 1)
+    check("close in that pass was reconciled", database.get_recent_trades(5)[0]["status"] == "CLOSED")
+
     # 7. Fresh signals trade immediately; stale ones do not.
     executed = []
     fresh = _trade("BUY", 2000.0, 1995.0, 2010.0, 5)
@@ -166,11 +213,24 @@ def main():
     trader.get_data = lambda *a, **k: object()
     trader._generate_signals = lambda df: [fresh, stale]
     trader.place_trade = executed.append
+    trader._stop = False
     live_module.time.sleep = lambda seconds: setattr(trader, "_stop", True)
     trader.run_web()
 
     check("5-second-old signal executes immediately", fresh in executed)
     check("1-hour-old signal is refused", stale not in executed)
+
+    # 10. A mid-day restart keeps the daily-loss stop armed.
+    restarted = LiveTrader(web_state={"upcoming": [], "open_positions": [], "trade_history": []})
+    today = database.get_day_state(live_module.LiveTrader._today(restarted))
+    check("restart restores today's realised P/L", abs(restarted.risk_mgr.daily_pnl - today["realised_usd"]) < 1e-9)
+    check("restart restores the loss streak", restarted.risk_mgr.consecutive_losses == today["trailing_losses"] > 0)
+    check("restart restores the day-start balance", restarted.risk_mgr.day_start_balance > 0)
+
+    restarted._save_state()
+    saved = json.loads(live_module.STATE_FILE.read_text())
+    check("day-start balance is persisted", "day_start_balance" in saved and saved["day_start_balance"] > 0)
+    check("daily P&L is persisted", "daily_pnl" in saved)
 
     failed = [label for label, ok in checks if not ok]
     print(f"\n{len(checks) - len(failed)}/{len(checks)} checks passed")

@@ -213,6 +213,19 @@ HTML = r'''
         .analysis-card strong { color: var(--muted); display: inline-block; min-width: 100px; }
         
         .menu-toggle { display: none; background: none; border: none; color: var(--gold); font-size: 24px; cursor: pointer; }
+
+        .risk { padding: 14px 16px; }
+        .risk-head {
+            display: flex; justify-content: space-between; align-items: baseline;
+            font-size: 11px; color: var(--muted); letter-spacing: 1px;
+            margin-bottom: 8px; text-transform: uppercase;
+        }
+        .risk-head strong { color: var(--text); font-weight: 600; letter-spacing: 0; }
+        .risk-track { background: #1a1a1a; border-radius: 2px; height: 4px; overflow: hidden; }
+        .risk-fill { background: var(--green); border-radius: 2px; height: 100%; width: 0; transition: width 0.3s ease; }
+        .risk-fill.warn { background: var(--gold); }
+        .risk-fill.hot { background: var(--red); }
+        .card .value.small { font-size: 20px; }
         
         @media (max-width: 768px) {
             .sidebar {
@@ -278,12 +291,23 @@ HTML = r'''
         <div class="cards">
             <div class="card"><div class="label">Balance</div><div class="value gold-text" id="bal">$0</div></div>
             <div class="card"><div class="label">Daily P&L</div><div class="value" id="dpnl">$0</div></div>
-            <div class="card"><div class="label">Total Return</div><div class="value" id="ret">0%</div></div>
+            <div class="card"><div class="label">Day Return</div><div class="value" id="ret">0%</div></div>
             <div class="card"><div class="label">Win Rate</div><div class="value gold-text" id="wr">0%</div></div>
             <div class="card"><div class="label">Total Trades</div><div class="value" id="tt">0</div></div>
             <div class="card"><div class="label">Today</div><div class="value" id="dt">0</div></div>
             <div class="card"><div class="label">XAUUSD</div><div class="value gold-text" id="px" style="font-size:20px;">0</div></div>
             <div class="card"><div class="label">Spread</div><div class="value" id="sp">0</div></div>
+        </div>
+        <div class="cards">
+            <div class="card"><div class="label">Closed P&amp;L</div><div class="value" id="cpnl">$0</div></div>
+            <div class="card"><div class="label">Total Pips</div><div class="value" id="tpips">0</div></div>
+            <div class="card"><div class="label">Win / Loss</div><div class="value small" id="wl">0 / 0</div></div>
+            <div class="card"><div class="label">Loss Streak</div><div class="value small" id="streak">0</div></div>
+        </div>
+
+        <div class="section risk">
+            <div class="risk-head"><span>Daily risk used</span><strong id="risktxt">--</strong></div>
+            <div class="risk-track"><div class="risk-fill" id="riskfill"></div></div>
         </div>
         
         <div class="section">
@@ -307,8 +331,8 @@ HTML = r'''
     <div class="page" id="page-history">
         <div class="section">
             <h3>Trade History</h3>
-            <table><thead><tr><th>Time (SA)</th><th>Type</th><th>Entry</th><th>Exit</th><th>Pips</th><th>Result</th></tr></thead>
-            <tbody id="hist"><tr><td colspan="6" style="text-align:center;color:var(--muted);">No trades yet</td></tr></tbody></table>
+            <table><thead><tr><th>Time (SA)</th><th>Type</th><th>Entry</th><th>Exit</th><th>Pips</th><th>P&amp;L</th><th>Result</th></tr></thead>
+            <tbody id="hist"><tr><td colspan="7" style="text-align:center;color:var(--muted);">No trades yet</td></tr></tbody></table>
         </div>
     </div>
 
@@ -483,11 +507,35 @@ s.on('state_update', d => {
     // Trade history
     var hist = d.trade_history || [];
     var hh = '';
-    if (hist.length === 0) hh = '<tr><td colspan="6" style="text-align:center;color:var(--muted);">No trades yet</td></tr>';
+    if (hist.length === 0) hh = '<tr><td colspan="7" style="text-align:center;color:var(--muted);">No trades yet</td></tr>';
     else hist.slice(-30).reverse().forEach(function(h) {
-        hh += '<tr><td>' + (h.time||'') + '</td><td class="tag-' + (h.type === 'BUY' ? 'buy' : 'sell') + '">' + (h.type||'') + '</td><td>' + (h.entry||0).toFixed(2) + '</td><td>' + (h.exit||0).toFixed(2) + '</td><td>' + (h.pips||0).toFixed(0) + '</td><td><span class="tag-' + (h.win ? 'win' : 'loss') + '">' + (h.win ? 'WIN' : 'LOSS') + '</span></td></tr>';
+        hh += '<tr><td>' + (h.time||'') + '</td><td class="tag-' + (h.type === 'BUY' ? 'buy' : 'sell') + '">' + (h.type||'') + '</td><td>' + (h.entry||0).toFixed(2) + '</td><td>' + (h.exit||0).toFixed(2) + '</td><td>' + (h.pips||0).toFixed(0) + '</td><td class="' + ((h.usd||0) >= 0 ? 'green-text' : 'red-text') + '">' + ((h.usd||0) >= 0 ? '+' : '-') + Math.abs(h.usd||0).toFixed(2) + '</td><td><span class="tag-' + (h.win ? 'win' : 'loss') + '">' + (h.win ? 'WIN' : 'LOSS') + '</span></td></tr>';
     });
     document.getElementById('hist').innerHTML = hh;
+
+    // Realised performance and daily risk headroom
+    var cpnl = d.closed_pnl || 0;
+    var cpnlEl = document.getElementById('cpnl');
+    cpnlEl.textContent = (cpnl < 0 ? '-$' : '+$') + Math.abs(cpnl).toLocaleString('en-US', {minimumFractionDigits: 2});
+    cpnlEl.className = 'value ' + (cpnl >= 0 ? 'green-text' : 'red-text');
+
+    document.getElementById('tpips').textContent = (d.total_pips || 0).toLocaleString('en-US') + ' p';
+    document.getElementById('wl').textContent = (d.wins || 0) + ' / ' + (d.losses || 0);
+
+    var streak = d.consecutive_losses || 0;
+    var streakEl = document.getElementById('streak');
+    streakEl.textContent = streak >= 3 ? streak + ' paused' : streak;
+    streakEl.className = 'value small ' + (streak >= 3 ? 'red-text' : '');
+
+    var budget = d.risk_budget || 0;
+    var used = Math.max(-(d.daily_pnl || 0), 0);
+    var pct = budget > 0 ? Math.min(used / budget * 100, 100) : 0;
+    var fill = document.getElementById('riskfill');
+    fill.style.width = pct.toFixed(0) + '%';
+    fill.className = 'risk-fill' + (pct >= 99 ? ' hot' : pct >= 60 ? ' warn' : '');
+    document.getElementById('risktxt').textContent = budget > 0
+        ? used.toFixed(2) + ' / ' + budget.toFixed(2) + ' USD  ' + pct.toFixed(0) + '%'
+        : '--';
 });
 
 setInterval(function() {
