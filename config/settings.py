@@ -8,6 +8,11 @@ MAX_DAILY_RISK = 0.03          # 3% max daily loss
 MAX_CONCURRENT_TRADES = 3
 MAX_DAILY_TRADES = 10
 
+# === EXECUTION ===
+LOOP_SECONDS = 2               # Main loop poll interval (was 10s)
+MAX_SIGNAL_AGE_SECONDS = 120   # Execute signals younger than this (was 30-300s)
+MAX_SPREAD_PIPS = 50           # Skip entries when the spread is wider than this
+
 # === DAILY BREAKOUT ===
 BREAKOUT_ENABLED = True
 BREAKOUT_SYMBOL = "XAUUSD"

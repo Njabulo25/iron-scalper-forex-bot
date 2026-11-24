@@ -1,0 +1,22 @@
+Loan Shark Management System
+1.User(Customer) will want to borrow money
+2.User(Lender) ask how much if amount available then ensure to take Customer details else amount > balance or other reject
+               ,and calculates interest rates,
+               penalties if money is not paid in due time, depanding on the contract,
+               ensure the user allows and sign the form or agree on contract details beforehand
+2.User(Lender) agrees to borrow money and pay
+3.to make things simple for both users, they dont have to add date and time of when the transction was made its done by system
+4.customer fills a form:
+  name
+  surname
+  age if age < 21 reject
+  number phone
+  email
+  home address
+  preferred method of payment(cash or card)
+  if card provide details like number we will use payshap
+  intial payment and end date, this can be done by the system or have option to do it
+  amount they want, from here the loan shark
+  then the system will calculate and send the customer the receipt with when the initial loan was taken, charges, and end date before penalities using preferred method of communication
+5.we must also check that users can pay partially 
+  
