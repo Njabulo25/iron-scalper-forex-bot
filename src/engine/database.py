@@ -6,12 +6,19 @@ write and read helpers also initialize the schema defensively.
 """
 
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATABASE_PATH = PROJECT_ROOT / "data" / "iron_scalper.db"
+
+# Databases whose schema has already been created in this process. The bot runs
+# a 2 second loop, so re-running the schema and the position_id backfill on
+# every query was wasted work on each pass.
+_INITIALIZED = set()
+_INIT_LOCK = threading.Lock()
 
 
 def _connect():
@@ -50,6 +57,16 @@ def _validated_limit(limit):
     """Return a safe positive SQL LIMIT value."""
     limit = int(limit)
     return max(limit, 0)
+
+
+def _ensure_ready():
+    """Create the schema once per process, not once per database call."""
+    key = str(DATABASE_PATH)
+    if key in _INITIALIZED:
+        return
+    with _INIT_LOCK:
+        if key not in _INITIALIZED:
+            init_db()
 
 
 def init_db():
@@ -128,10 +145,12 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_trades_position_id ON trades (position_id)"
         )
 
+    _INITIALIZED.add(str(DATABASE_PATH))
+
 
 def log_signal(symbol, strategy, signal_type, entry, sl, tp, signal_time):
     """Record a newly generated strategy signal as unexecuted."""
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         cursor = connection.execute(
             """
@@ -146,7 +165,7 @@ def log_signal(symbol, strategy, signal_type, entry, sl, tp, signal_time):
 
 def log_trade_open(ticket, symbol, trade_type, strategy, entry, sl, tp, lots, open_time, position_id=None):
     """Record an MT5 trade after its opening order has been accepted."""
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         cursor = connection.execute(
             """
@@ -167,7 +186,7 @@ def log_trade_open(ticket, symbol, trade_type, strategy, entry, sl, tp, lots, op
 
 def log_trade_close(ticket, exit_price, profit_pips, profit_usd, close_time):
     """Mark an existing MT5 trade as closed and save its realised result."""
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         cursor = connection.execute(
             """
@@ -190,7 +209,7 @@ def get_recent_trades(limit=100):
     if limit == 0:
         return []
 
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         rows = connection.execute(
             """
@@ -210,7 +229,7 @@ def get_recent_signals(limit=100):
     if limit == 0:
         return []
 
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         rows = connection.execute(
             """
@@ -226,7 +245,7 @@ def get_recent_signals(limit=100):
 
 def get_trade_by_ticket(ticket):
     """Return one trade by its MT5 order ticket, or ``None`` when absent."""
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         row = connection.execute(
             "SELECT * FROM trades WHERE ticket = ?",
@@ -240,7 +259,7 @@ def get_open_trade_by_position(position_id):
     if not position_id:
         return None
 
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         row = connection.execute(
             """
@@ -255,23 +274,20 @@ def get_open_trade_by_position(position_id):
     return dict(row) if row is not None else None
 
 
-def get_trade_stats():
-    """Return realised performance across every closed trade."""
-    init_db()
-    with _DatabaseConnection() as connection:
-        row = connection.execute(
-            """
-            SELECT
-                COUNT(*) AS total_trades,
-                COALESCE(SUM(CASE WHEN profit_pips > 0 THEN 1 ELSE 0 END), 0) AS wins,
-                COALESCE(SUM(CASE WHEN profit_pips <= 0 THEN 1 ELSE 0 END), 0) AS losses,
-                COALESCE(SUM(profit_pips), 0) AS total_pips,
-                COALESCE(SUM(profit_usd), 0) AS total_usd
-            FROM trades
-            WHERE status = 'CLOSED'
-            """
-        ).fetchone()
+_STATS_SQL = """
+    SELECT
+        COUNT(*) AS total_trades,
+        COALESCE(SUM(CASE WHEN profit_pips > 0 THEN 1 ELSE 0 END), 0) AS wins,
+        COALESCE(SUM(CASE WHEN profit_pips <= 0 THEN 1 ELSE 0 END), 0) AS losses,
+        COALESCE(SUM(profit_pips), 0) AS total_pips,
+        COALESCE(SUM(profit_usd), 0) AS total_usd
+    FROM trades
+    WHERE status = 'CLOSED'
+"""
 
+
+def _stats_from_row(row):
+    """Shape one aggregate row into the stats dictionary."""
     total_trades = row["total_trades"] or 0
     wins = row["wins"] or 0
     return {
@@ -284,9 +300,83 @@ def get_trade_stats():
     }
 
 
+def get_dashboard_snapshot(limit=60):
+    """Return realised stats and recent closed trades in a single connection."""
+    limit = _validated_limit(limit)
+    _ensure_ready()
+    with _DatabaseConnection() as connection:
+        stats_row = connection.execute(_STATS_SQL).fetchone()
+        rows = connection.execute(
+            """
+            SELECT trade_type, entry_price, exit_price, profit_pips, profit_usd,
+                   open_time, close_time, strategy
+            FROM trades
+            WHERE status = 'CLOSED'
+            ORDER BY close_time DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    history = [
+        {
+            "time": row["close_time"] or row["open_time"],
+            "type": row["trade_type"],
+            "strategy": row["strategy"],
+            "entry": row["entry_price"],
+            "exit": row["exit_price"] or 0,
+            "pips": row["profit_pips"] or 0,
+            "usd": row["profit_usd"] or 0,
+            "win": (row["profit_pips"] or 0) > 0,
+        }
+        for row in rows
+    ]
+    return {"stats": _stats_from_row(stats_row), "history": history}
+
+
+def get_trade_stats():
+    """Return realised performance across every closed trade."""
+    return get_dashboard_snapshot(0)["stats"]
+
+
+def get_day_state(day=None):
+    """Return one trading day's realised result and its trailing loss streak.
+
+    ``day`` is the broker-clock day (the clock the stored timestamps use).
+    """
+    if day is None:
+        day = datetime.now().date()
+
+    _ensure_ready()
+    with _DatabaseConnection() as connection:
+        rows = connection.execute(
+            """
+            SELECT profit_usd
+            FROM trades
+            WHERE status = 'CLOSED' AND date(close_time) = ?
+            ORDER BY close_time DESC, id DESC
+            """,
+            (str(day),),
+        ).fetchall()
+
+    realised_usd = sum(row["profit_usd"] or 0.0 for row in rows)
+    trailing_losses = 0
+    for row in rows:
+        if (row["profit_usd"] or 0.0) < 0:
+            trailing_losses += 1
+        else:
+            break
+
+    return {
+        "realised_usd": round(realised_usd, 2),
+        "trades": len(rows),
+        "trailing_losses": trailing_losses,
+    }
+
+
 def get_win_rate():
     """Return aggregate closed-trade performance based on realised pips."""
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         row = connection.execute(
             """
@@ -316,7 +406,7 @@ def add_user(username, pin, role):
     if role not in {"admin", "viewer"}:
         raise ValueError("role must be 'admin' or 'viewer'")
 
-    init_db()
+    _ensure_ready()
     try:
         with _DatabaseConnection() as connection:
             connection.execute(
@@ -330,7 +420,7 @@ def add_user(username, pin, role):
 
 def verify_user(username, pin):
     """Return whether the supplied username and PIN match a stored user."""
-    init_db()
+    _ensure_ready()
     with _DatabaseConnection() as connection:
         row = connection.execute(
             "SELECT 1 FROM users WHERE username = ? AND pin = ?",

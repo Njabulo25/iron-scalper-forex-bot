@@ -10,9 +10,9 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config.settings import *
 from src.engine.database import (
+    get_dashboard_snapshot,
+    get_day_state,
     get_open_trade_by_position,
-    get_recent_trades,
-    get_trade_stats,
     init_db,
     log_signal,
     log_trade_close,
@@ -30,6 +30,11 @@ STATE_FILE = DATA_DIR / "bot_state.json"
 def _server_timestamp(epoch_seconds):
     """Convert an MT5 server epoch to the same naive frame as bar timestamps."""
     return datetime.fromtimestamp(epoch_seconds, timezone.utc).replace(tzinfo=None)
+
+
+def _today_string():
+    """Today's date on the broker clock, falling back to this PC's clock."""
+    return str(datetime.now(timezone.utc).replace(tzinfo=None).date())
 
 
 class LiveTrader:
@@ -66,6 +71,11 @@ class LiveTrader:
             self.risk_mgr.current_balance = a.balance
             self.risk_mgr.initial_balance = a.balance
 
+        self._restore_day_state(a)
+
+        if self.web_state:
+            self.web_state["starting_balance"] = self.risk_mgr.day_start_balance
+
         positions = mt5.positions_get(symbol=BREAKOUT_SYMBOL)
         if positions:
             self.risk_mgr.open_positions = len(positions)
@@ -77,21 +87,38 @@ class LiveTrader:
     # ── State persistence ──────────────────────────────────────────
 
     def _load_state(self):
-        if STATE_FILE.exists():
+        self._saved_state = {}
+        self._executed_signals = set()
+        if not STATE_FILE.exists():
+            return
+
+        try:
             data = json.loads(STATE_FILE.read_text())
-            saved_date = data.get("date", "")
-            self._executed_signals = set(data.get("executed_signals", []))
-            if saved_date != str(datetime.now().date()):
-                self._executed_signals = set()
-        else:
+        except Exception:
+            # A half-written state file must not stop the bot from starting.
+            return
+
+        self._saved_state = data
+        saved_date = data.get("date", "")
+        self._executed_signals = set(data.get("executed_signals", []))
+        today = _today_string()
+        if saved_date not in {today, str(datetime.now().date())}:
             self._executed_signals = set()
 
     def _save_state(self):
-        STATE_FILE.write_text(json.dumps({
-            "date": str(datetime.now().date()),
-            "executed_signals": list(self._executed_signals),
-            "balance": self.risk_mgr.current_balance
-        }, indent=2))
+        try:
+            STATE_FILE.write_text(json.dumps({
+                "date": _today_string(),
+                "executed_signals": list(self._executed_signals),
+                "balance": self.risk_mgr.current_balance,
+                # Persisted so a mid-day restart cannot reset the daily-loss stop.
+                "day_start_balance": self.risk_mgr.day_start_balance,
+                "daily_pnl": self.risk_mgr.daily_pnl,
+                "daily_trades": self.risk_mgr.daily_trades,
+                "consecutive_losses": self.risk_mgr.consecutive_losses,
+            }, indent=2))
+        except Exception as error:
+            print(f"Could not save state: {error}")
 
     # ── Clock helpers ──────────────────────────────────────────────
 
@@ -107,6 +134,13 @@ class LiveTrader:
             return _server_timestamp(tick.time)
         return datetime.now(timezone.utc).replace(tzinfo=None)
 
+    def _today(self):
+        """Trading day on the broker clock."""
+        try:
+            return self._server_now().date()
+        except Exception:
+            return datetime.now().date()
+
     def _display_offset(self):
         """Offset from broker time to the local clock, rounded to 15 minutes."""
         try:
@@ -119,6 +153,44 @@ class LiveTrader:
         """How long ago the signal bar closed, measured on the broker clock."""
         server_now = server_now or self._server_now()
         return (server_now - trade["time"]).total_seconds()
+
+    def _restore_day_state(self, account):
+        """Rebuild today's risk state so restarting mid-day keeps the brakes armed."""
+        today = self._today()
+        saved = self._saved_state or {}
+        saved_today = saved.get("date") in {str(today), str(datetime.now().date())}
+        balance = account.balance if account else self.risk_mgr.current_balance
+
+        try:
+            day = get_day_state(today)
+        except Exception:
+            day = {"realised_usd": 0.0, "trades": 0, "trailing_losses": 0}
+
+        day_pnl = day["realised_usd"]
+        day_trades = day["trades"]
+        trailing = day["trailing_losses"]
+
+        if not day_trades and saved_today:
+            # Nothing closed today in the database: fall back to the saved state.
+            day_pnl = float(saved.get("daily_pnl") or 0.0)
+            day_trades = int(saved.get("daily_trades") or 0)
+            trailing = int(saved.get("consecutive_losses") or 0)
+
+        self.risk_mgr.daily_pnl = day_pnl
+        self.risk_mgr.daily_trades = day_trades
+        self.risk_mgr.consecutive_losses = trailing
+        self.risk_mgr.current_balance = balance
+
+        saved_start = saved.get("day_start_balance") if saved_today else None
+        self.risk_mgr.day_start_balance = (
+            float(saved_start) if saved_start else balance - day_pnl
+        )
+
+        if day_pnl or trailing:
+            print(
+                f"Restored day state: P/L {day_pnl:+.2f} from {day_trades} trades, "
+                f"streak {trailing}, day start {self.risk_mgr.day_start_balance:,.2f}"
+            )
 
     # ── MT5 helpers ────────────────────────────────────────────────
 
@@ -340,36 +412,34 @@ class LiveTrader:
     # ── Stats ──────────────────────────────────────────────────────
 
     def _refresh_stats(self):
-        """Publish real DB statistics so the dashboard stops showing zeros."""
+        """Publish realised stats and risk headroom; called once per pass."""
         if not self.web_state:
             return
-        try:
-            stats = get_trade_stats()
-            self.web_state["total_trades"] = stats["total_trades"]
-            self.web_state["wins"] = stats["wins"]
-            self.web_state["losses"] = stats["losses"]
-            self.web_state["win_rate"] = stats["win_rate"]
-            self.web_state["closed_pnl"] = stats["total_usd"]
-            self.web_state["total_pips"] = stats["total_pips"]
-        except Exception:
-            pass
 
         try:
-            history = []
-            for trade in get_recent_trades(60):
-                if trade["status"] != "CLOSED":
-                    continue
-                history.append({
-                    "time": trade["close_time"] or trade["open_time"],
-                    "type": trade["trade_type"],
-                    "entry": trade["entry_price"],
-                    "exit": trade["exit_price"] or 0,
-                    "pips": trade["profit_pips"] or 0,
-                    "win": (trade["profit_pips"] or 0) > 0,
-                })
-            self.web_state["trade_history"] = history
+            snapshot = get_dashboard_snapshot(60)
         except Exception:
-            pass
+            snapshot = {"stats": {}, "history": []}
+
+        stats = snapshot["stats"]
+        self.web_state["total_trades"] = stats.get("total_trades", 0)
+        self.web_state["wins"] = stats.get("wins", 0)
+        self.web_state["losses"] = stats.get("losses", 0)
+        self.web_state["win_rate"] = stats.get("win_rate", 0.0)
+        self.web_state["closed_pnl"] = stats.get("total_usd", 0.0)
+        self.web_state["total_pips"] = stats.get("total_pips", 0.0)
+        self.web_state["trade_history"] = snapshot["history"]
+
+        risk = self.risk_mgr
+        budget = risk.max_daily_risk * (risk.day_start_balance or risk.initial_balance)
+        used = max(-risk.daily_pnl, 0.0)
+        allowed, reason = risk.can_trade()
+
+        self.web_state["risk_budget"] = round(budget, 2)
+        self.web_state["risk_used_pct"] = round((used / budget * 100) if budget else 0.0, 1)
+        self.web_state["risk_reason"] = reason
+        self.web_state["trading_allowed"] = allowed
+        self.web_state["day_start_balance"] = round(risk.day_start_balance, 2)
 
     # ── Closed trade reconciliation ────────────────────────────────
 
@@ -429,7 +499,6 @@ class LiveTrader:
             # brakes can actually trip.
             self.risk_mgr.register_close(profit_usd)
             self._save_state()
-            self._refresh_stats()
 
             print(
                 f"CLOSED #{trade['ticket']} {profit_usd:+.2f} USD "
