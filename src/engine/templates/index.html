@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Iron Scalper · Trading Terminal</title>
+<link rel="preconnect" href="https://cdn.socket.io">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+
+<div class="scrim" id="scrim" data-close-nav></div>
+
+<aside class="sidebar" id="sidebar">
+    <div class="brand">
+        <div class="brand-mark">IS</div>
+        <div class="brand-text">
+            <strong>IRON SCALPER</strong>
+            <span>XAUUSD · Terminal</span>
+        </div>
+    </div>
+
+    <nav class="nav" id="nav">
+        <p class="nav-group">Overview</p>
+        <a href="#overview" class="nav-link is-active" data-page="overview">
+            <span class="dot"></span>Dashboard
+        </a>
+        <a href="#performance" class="nav-link" data-page="performance">
+            <span class="dot"></span>Performance
+        </a>
+
+        <p class="nav-group">Trading</p>
+        <a href="#positions" class="nav-link" data-page="positions">
+            <span class="dot"></span>Open positions<span class="pill" id="nav-positions">0</span>
+        </a>
+        <a href="#history" class="nav-link" data-page="history">
+            <span class="dot"></span>Trade history
+        </a>
+        <a href="#strategies" class="nav-link" data-page="strategies">
+            <span class="dot"></span>Strategies
+        </a>
+        <a href="#risk" class="nav-link" data-page="risk">
+            <span class="dot"></span>Risk &amp; ATR
+        </a>
+
+        <p class="nav-group">Intelligence</p>
+        <a href="#ml" class="nav-link" data-page="ml">
+            <span class="dot"></span>Machine learning
+        </a>
+        <a href="#training" class="nav-link" data-page="training">
+            <span class="dot"></span>Training &amp; models
+        </a>
+        <a href="#backtesting" class="nav-link" data-page="backtesting">
+            <span class="dot"></span>Backtesting
+        </a>
+
+        <p class="nav-group">System</p>
+        <a href="#connection" class="nav-link" data-page="connection">
+            <span class="dot"></span>MT5 connection
+        </a>
+        <a href="#logs" class="nav-link" data-page="logs">
+            <span class="dot"></span>Logs &amp; health
+        </a>
+        <a href="#graph" class="nav-link" data-page="graph">
+            <span class="dot"></span>Chart analysis
+        </a>
+        <a href="#share" class="nav-link" data-page="share">
+            <span class="dot"></span>Deploy notes
+        </a>
+    </nav>
+
+    <div class="sidebar-foot">
+        <div class="user-row">
+            <span class="user-avatar">{{ username[0]|upper }}</span>
+            <div>
+                <strong>{{ username }}</strong>
+                <span>Operator</span>
+            </div>
+            <a class="logout" href="/logout" onclick="return confirm('Sign out of the terminal?')">Sign out</a>
+        </div>
+        <p class="risk-note">
+            <strong>Risk notice.</strong> Leveraged gold trading can lose more than
+            the balance shown. Results here are recorded trades, not a forecast.
+        </p>
+    </div>
+</aside>
+
+<div class="shell">
+    <header class="topbar">
+        <button class="icon-btn menu-btn" data-open-nav aria-label="Open navigation">☰</button>
+        <div class="topbar-title">
+            <h1 id="page-title">Dashboard</h1>
+            <p id="page-sub">Live account, execution and risk state</p>
+        </div>
+        <div class="topbar-actions">
+            <span class="chip" id="mt5-chip" title="MetaTrader 5 connection">
+                <span class="chip-dot"></span><span id="mt5-chip-text">MT5 idle</span>
+            </span>
+            <span class="badge badge-stopped" id="engine-badge">Stopped</span>
+            <div class="btn-group">
+                <button class="btn btn-primary" id="btn-start">Start engine</button>
+                <button class="btn btn-danger" id="btn-stop" disabled>Stop</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="content">
+
+        <!-- ── OVERVIEW ─────────────────────────────────────────── -->
+        <section class="page is-active" id="page-overview">
+            <div class="banner banner-warn" id="ov-stopped-banner" hidden>
+                <strong>Engine stopped.</strong> Account values below come from the last
+                published session; start the engine to read the live terminal.
+            </div>
+
+            <div class="kpi-grid kpi-grid-6" id="account-kpis">
+                <article class="kpi" title="Broker account balance, excluding floating profit">
+                    <span class="kpi-label">Balance</span>
+                    <strong class="kpi-value" id="kpi-balance">—</strong>
+                    <span class="kpi-note" id="kpi-balance-note">not connected</span>
+                </article>
+                <article class="kpi" title="Balance plus floating profit and loss">
+                    <span class="kpi-label">Equity</span>
+                    <strong class="kpi-value" id="kpi-equity">—</strong>
+                    <span class="kpi-note" id="kpi-equity-note">not connected</span>
+                </article>
+                <article class="kpi" title="Margin available for new positions">
+                    <span class="kpi-label">Free margin</span>
+                    <strong class="kpi-value" id="kpi-free-margin">—</strong>
+                    <span class="kpi-note" id="kpi-margin-level">—</span>
+                </article>
+                <article class="kpi" title="Margin currently held by open positions">
+                    <span class="kpi-label">Used margin</span>
+                    <strong class="kpi-value" id="kpi-used-margin">—</strong>
+                    <span class="kpi-note" id="kpi-used-note">—</span>
+                </article>
+                <article class="kpi" title="Equity minus balance: unrealised profit on open positions">
+                    <span class="kpi-label">Floating P/L</span>
+                    <strong class="kpi-value" id="kpi-floating">—</strong>
+                    <span class="kpi-note" id="kpi-floating-note">—</span>
+                </article>
+                <article class="kpi" title="Realised profit and loss since the engine's day start">
+                    <span class="kpi-label">Daily P/L</span>
+                    <strong class="kpi-value" id="kpi-daily">—</strong>
+                    <span class="kpi-note" id="kpi-daily-note">—</span>
+                </article>
+            </div>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head">
+                        <div>
+                            <h2>Account</h2>
+                            <p>Terminal identity and margin state</p>
+                        </div>
+                        <span class="tag" id="account-mode">offline</span>
+                    </header>
+                    <dl class="detail-list" id="account-details">
+                        <div><dt>Login</dt><dd>—</dd></div>
+                    </dl>
+                </article>
+
+                <article class="panel">
+                    <header class="panel-head">
+                        <div>
+                            <h2>Live market</h2>
+                            <p>Symbol, quote and active strategy</p>
+                        </div>
+                        <span class="tag" id="market-mode">idle</span>
+                    </header>
+                    <div class="quote">
+                        <div>
+                            <span class="kpi-label">Bid</span>
+                            <strong class="quote-value" id="live-bid">—</strong>
+                        </div>
+                        <div>
+                            <span class="kpi-label">Ask</span>
+                            <strong class="quote-value" id="live-ask">—</strong>
+                        </div>
+                        <div>
+                            <span class="kpi-label">Spread</span>
+                            <strong class="quote-value small" id="live-spread">—</strong>
+                        </div>
+                    </div>
+                    <dl class="detail-list" id="market-details">
+                        <div><dt>Symbol</dt><dd>—</dd></div>
+                    </dl>
+                </article>
+            </div>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <div>
+                        <h2>Equity curve</h2>
+                        <p id="overview-equity-note">Cumulative realised P&amp;L</p>
+                    </div>
+                    <div class="segmented" data-range-group="overview">
+                        <button data-range="30d">30D</button>
+                        <button data-range="90d" class="is-active">90D</button>
+                        <button data-range="1y">1Y</button>
+                        <button data-range="all">All</button>
+                    </div>
+                </header>
+                <div class="chart" id="overview-equity"></div>
+            </article>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head">
+                        <div><h2>Daily P&amp;L</h2><p>Realised net per close day</p></div>
+                    </header>
+                    <div class="chart chart-sm" id="overview-daily"></div>
+                </article>
+                <article class="panel">
+                    <header class="panel-head">
+                        <div><h2>Open positions</h2><p>Live exposure and stops</p></div>
+                        <a class="link" href="#positions">All positions</a>
+                    </header>
+                    <div class="table-wrap">
+                        <table class="table compact" id="overview-positions">
+                            <thead><tr><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th class="right">P/L</th></tr></thead>
+                            <tbody><tr><td colspan="5" class="empty">No open positions</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+            </div>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Daily risk headroom</h2><p>Loss budget consumed today</p></div>
+                    <span class="mono" id="risk-usage-text">—</span>
+                </header>
+                <div class="meter"><span id="risk-meter-fill"></span></div>
+                <p class="panel-note" id="risk-usage-note">Start the engine to compute the daily budget.</p>
+            </article>
+        </section>
+
+        <!-- ── PERFORMANCE ──────────────────────────────────────── -->
+        <section class="page" id="page-performance">
+            <div class="page-toolbar">
+                <div class="segmented" data-range-group="performance">
+                    <button data-range="7d">7D</button>
+                    <button data-range="30d" class="is-active">30D</button>
+                    <button data-range="90d">90D</button>
+                    <button data-range="1y">1Y</button>
+                    <button data-range="all">All</button>
+                </div>
+                <div class="range-dates">
+                    <label>From <input type="date" id="perf-start"></label>
+                    <label>To <input type="date" id="perf-end"></label>
+                    <button class="btn btn-ghost btn-sm" id="perf-apply">Apply</button>
+                </div>
+            </div>
+
+            <div class="kpi-grid kpi-grid-4" id="performance-kpis">
+                <article class="kpi" title="Winning closed trades divided by all closed trades">
+                    <span class="kpi-label">Win rate</span>
+                    <strong class="kpi-value" id="perf-winrate">—</strong>
+                    <span class="kpi-note" id="perf-winrate-note">no closed trades</span>
+                </article>
+                <article class="kpi" title="Gross profit divided by gross loss">
+                    <span class="kpi-label">Profit factor</span>
+                    <strong class="kpi-value" id="perf-pf">—</strong>
+                    <span class="kpi-note" id="perf-pf-note">—</span>
+                </article>
+                <article class="kpi" title="Closed trades in the selected window">
+                    <span class="kpi-label">Total trades</span>
+                    <strong class="kpi-value" id="perf-trades">—</strong>
+                    <span class="kpi-note" id="perf-trades-note">—</span>
+                </article>
+                <article class="kpi" title="Closed trades with positive and non-positive net result">
+                    <span class="kpi-label">Wins / losses</span>
+                    <strong class="kpi-value" id="perf-wl">—</strong>
+                    <span class="kpi-note" id="perf-wl-note">—</span>
+                </article>
+                <article class="kpi" title="Sum of realised net profit in the window">
+                    <span class="kpi-label">Net profit</span>
+                    <strong class="kpi-value" id="perf-net">—</strong>
+                    <span class="kpi-note" id="perf-net-note">—</span>
+                </article>
+                <article class="kpi" title="Largest peak-to-trough fall on the realised equity path">
+                    <span class="kpi-label">Max drawdown</span>
+                    <strong class="kpi-value" id="perf-dd">—</strong>
+                    <span class="kpi-note" id="perf-dd-note">—</span>
+                </article>
+                <article class="kpi" title="Average R multiple per trade, when R is recorded">
+                    <span class="kpi-label">Expectancy</span>
+                    <strong class="kpi-value" id="perf-expectancy">—</strong>
+                    <span class="kpi-note" id="perf-expectancy-note">—</span>
+                </article>
+                <article class="kpi" title="Average net result per closed trade">
+                    <span class="kpi-label">Avg trade</span>
+                    <strong class="kpi-value" id="perf-avg">—</strong>
+                    <span class="kpi-note" id="perf-avg-note">—</span>
+                </article>
+            </div>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Equity curve</h2><p id="perf-equity-note">Cumulative realised P&amp;L</p></div>
+                </header>
+                <div class="chart" id="perf-equity"></div>
+            </article>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Daily performance</h2><p>Net result per day</p></div></header>
+                    <div class="chart chart-sm" id="perf-daily"></div>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Monthly performance</h2><p>Net result per month</p></div></header>
+                    <div class="chart chart-sm" id="perf-monthly"></div>
+                </article>
+            </div>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>By strategy</h2><p>Where the result comes from</p></div></header>
+                    <div class="table-wrap">
+                        <table class="table" id="perf-strategies">
+                            <thead><tr><th>Strategy</th><th class="right">Trades</th><th class="right">Win rate</th><th class="right">Avg R</th><th class="right">Net</th></tr></thead>
+                            <tbody><tr><td colspan="5" class="empty">No closed trades in this window</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>By close hour</h2><p>Broker clock, hourly buckets</p></div></header>
+                    <div class="table-wrap scroll-y">
+                        <table class="table" id="perf-sessions">
+                            <thead><tr><th>Hour</th><th class="right">Trades</th><th class="right">Win rate</th><th class="right">Net</th></tr></thead>
+                            <tbody><tr><td colspan="4" class="empty">No closed trades in this window</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <!-- ── POSITIONS ────────────────────────────────────────── -->
+        <section class="page" id="page-positions">
+            <div class="banner banner-info" id="positions-banner" hidden></div>
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Open positions</h2><p>Live from the MT5 terminal, with active stops</p></div>
+                    <span class="mono" id="positions-count">0 positions</span>
+                </header>
+                <div class="table-wrap">
+                    <table class="table" id="positions-table">
+                        <thead><tr>
+                            <th>Side</th><th>Ticket</th><th class="right">Volume</th><th class="right">Entry</th>
+                            <th class="right">Stop loss</th><th class="right">Take profit</th><th>Strategy</th><th class="right">P/L</th>
+                        </tr></thead>
+                        <tbody><tr><td colspan="8" class="empty">No open positions</td></tr></tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Pending orders</h2><p>Orders placed but not filled</p></div>
+                </header>
+                <div class="table-wrap">
+                    <table class="table" id="pending-table">
+                        <thead><tr><th>Side</th><th>Ticket</th><th class="right">Volume</th><th class="right">Price</th><th class="right">Stop loss</th><th class="right">Take profit</th><th>State</th></tr></thead>
+                        <tbody><tr><td colspan="7" class="empty">No pending orders</td></tr></tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <!-- ── HISTORY ──────────────────────────────────────────── -->
+        <section class="page" id="page-history">
+            <div class="page-toolbar wrap">
+                <div class="filters">
+                    <label>Range
+                        <select id="hist-range">
+                            <option value="7d">Last 7 days</option>
+                            <option value="30d" selected>Last 30 days</option>
+                            <option value="90d">Last 90 days</option>
+                            <option value="1y">Last year</option>
+                            <option value="all">All time</option>
+                        </select>
+                    </label>
+                    <label>From <input type="date" id="hist-start"></label>
+                    <label>To <input type="date" id="hist-end"></label>
+                    <label>Strategy <select id="hist-strategy"><option value="all">All strategies</option></select></label>
+                    <label>Result
+                        <select id="hist-result">
+                            <option value="all">All</option>
+                            <option value="wins">Wins</option>
+                            <option value="losses">Losses</option>
+                        </select>
+                    </label>
+                    <button class="btn btn-ghost btn-sm" id="hist-refresh">Refresh</button>
+                </div>
+                <span class="mono" id="hist-total">—</span>
+            </div>
+
+            <article class="panel">
+                <div class="table-wrap">
+                    <table class="table" id="history-table">
+                        <thead><tr>
+                            <th>Closed</th><th>Ticket</th><th>Side</th><th>Strategy</th><th class="right">Lots</th>
+                            <th class="right">Entry</th><th class="right">Exit</th><th class="right">Pips</th>
+                            <th class="right">Net</th><th class="right">R</th><th>Result</th>
+                        </tr></thead>
+                        <tbody><tr><td colspan="11" class="empty">No closed trades in this window</td></tr></tbody>
+                    </table>
+                </div>
+                <footer class="panel-foot">
+                    <button class="btn btn-ghost btn-sm" id="hist-prev">Previous</button>
+                    <span class="mono" id="hist-page">—</span>
+                    <button class="btn btn-ghost btn-sm" id="hist-next">Next</button>
+                </footer>
+            </article>
+        </section>
+
+        <!-- ── STRATEGIES ───────────────────────────────────────── -->
+        <section class="page" id="page-strategies">
+            <div class="banner banner-info" id="config-source"></div>
+            <div class="grid grid-2" id="strategy-cards">
+                <article class="panel" id="card-scalper">
+                    <header class="panel-head">
+                        <div><h2>Scalper</h2><p>EMA pullback with RSI filter, ATR stops</p></div>
+                        <span class="tag" id="scalper-state">—</span>
+                    </header>
+                    <dl class="detail-list" id="scalper-details"></dl>
+                </article>
+                <article class="panel" id="card-breakout">
+                    <header class="panel-head">
+                        <div><h2>Breakout</h2><p>Asian range breakout with ATR buffer</p></div>
+                        <span class="tag" id="breakout-state">—</span>
+                    </header>
+                    <dl class="detail-list" id="breakout-details"></dl>
+                </article>
+            </div>
+            <article class="panel">
+                <header class="panel-head"><div><h2>Execution configuration</h2><p>Loop timing, spread guard and order handling</p></div></header>
+                <dl class="detail-list detail-grid" id="execution-details"></dl>
+            </article>
+        </section>
+
+        <!-- ── RISK & ATR ───────────────────────────────────────── -->
+        <section class="page" id="page-risk">
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Risk limits</h2><p>Per trade, per day, per account</p></div></header>
+                    <dl class="detail-list" id="risk-details"></dl>
+                    <div class="meter meter-lg"><span id="risk-page-meter"></span></div>
+                    <p class="panel-note" id="risk-page-note">Start the engine to see today's consumption.</p>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>ATR stops and targets</h2><p>How volatility sets distance</p></div></header>
+                    <dl class="detail-list" id="atr-details"></dl>
+                </article>
+            </div>
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Recent risk refusals</h2><p>Signals blocked before an order was sent</p></div>
+                    <a class="link" href="#logs">All events</a>
+                </header>
+                <div class="table-wrap scroll-y">
+                    <table class="table" id="risk-events-table">
+                        <thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Strategy</th><th>Message</th></tr></thead>
+                        <tbody><tr><td colspan="5" class="empty">No risk events recorded</td></tr></tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <!-- ── MACHINE LEARNING ─────────────────────────────────── -->
+        <section class="page" id="page-ml">
+            <div class="banner banner-info" id="ml-banner">Loading model status…</div>
+
+            <div class="kpi-grid kpi-grid-4">
+                <article class="kpi" title="Version the engine would load">
+                    <span class="kpi-label">Model version</span>
+                    <strong class="kpi-value small mono" id="ml-version">—</strong>
+                    <span class="kpi-note" id="ml-trained">—</span>
+                </article>
+                <article class="kpi" title="Out-of-sample accuracy on the walk-forward test blocks">
+                    <span class="kpi-label">Accuracy (OOS)</span>
+                    <strong class="kpi-value" id="ml-accuracy">—</strong>
+                    <span class="kpi-note" id="ml-accuracy-note">—</span>
+                </article>
+                <article class="kpi" title="AUC: chance of ranking a winner above a loser">
+                    <span class="kpi-label">AUC</span>
+                    <strong class="kpi-value" id="ml-auc">—</strong>
+                    <span class="kpi-note" id="ml-auc-note">—</span>
+                </article>
+                <article class="kpi" title="Confidence threshold a signal must reach to be taken">
+                    <span class="kpi-label">Confidence gate</span>
+                    <strong class="kpi-value" id="ml-threshold">—</strong>
+                    <span class="kpi-note" id="ml-gate-state">—</span>
+                </article>
+            </div>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Win rate by prediction confidence</h2><p>Walk-forward bands from the active model</p></div></header>
+                    <div class="chart" id="ml-bands"></div>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Rule-based vs gated</h2><p>Out-of-sample expectancy per trade</p></div></header>
+                    <div class="chart" id="ml-comparison"></div>
+                </article>
+            </div>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Classifier quality</h2><p>Out-of-sample, all scored folds</p></div></header>
+                    <dl class="detail-list detail-grid" id="ml-classifier"></dl>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Live predictions</h2><p id="ml-monitor-window">Since deployment</p></div></header>
+                    <dl class="detail-list detail-grid" id="ml-monitor"></dl>
+                </article>
+            </div>
+
+            <article class="panel">
+                <header class="panel-head"><div><h2>Model summary</h2><p>Training data and sample counts</p></div></header>
+                <dl class="detail-list detail-grid" id="ml-summary"></dl>
+            </article>
+        </section>
+
+        <!-- ── TRAINING ─────────────────────────────────────────── -->
+        <section class="page" id="page-training">
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Versions</h2><p>Every model recorded in the database</p></div>
+                    <span class="mono" id="training-active">—</span>
+                </header>
+                <div class="table-wrap">
+                    <table class="table" id="training-versions">
+                        <thead><tr><th>Version</th><th>Trained</th><th class="right">Bars</th><th class="right">Signals</th><th class="right">Accuracy</th><th class="right">AUC</th><th>State</th></tr></thead>
+                        <tbody><tr><td colspan="7" class="empty">No model versions recorded</td></tr></tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article class="panel">
+                <header class="panel-head"><div><h2>Walk-forward by fold</h2><p>Out-of-sample total R, rule-based vs gated</p></div></header>
+                <div class="chart" id="training-folds"></div>
+            </article>
+
+            <div class="grid grid-2">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Training runs</h2><p>Parameters and samples per run</p></div></header>
+                    <div class="table-wrap scroll-y">
+                        <table class="table" id="training-runs">
+                            <thead><tr><th>Started</th><th>Status</th><th class="right">Folds</th><th class="right">Trainable</th><th class="right">Gated R</th></tr></thead>
+                            <tbody><tr><td colspan="5" class="empty">No training runs recorded</td></tr></tbody>
+                        </table>
+                    </div>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Live vs out-of-sample</h2><p>What the record looked like, and what trading delivered</p></div></header>
+                    <dl class="detail-list detail-grid" id="training-live"></dl>
+                </article>
+            </div>
+        </section>
+
+        <!-- ── BACKTESTING ──────────────────────────────────────── -->
+        <section class="page" id="page-backtesting">
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Walk-forward run</h2><p>Re-simulates both strategies on stored M5 bars, fold by fold</p></div>
+                </header>
+                <div class="filters">
+                    <label>From <input type="date" id="bt-start"></label>
+                    <label>To <input type="date" id="bt-end"></label>
+                    <label>Label <input type="text" id="bt-label" placeholder="e.g. pre-deployment check" maxlength="80"></label>
+                    <button class="btn btn-primary btn-sm" id="bt-run">Run backtest</button>
+                </div>
+                <p class="panel-note" id="bt-status">No run started in this session.</p>
+                <div id="bt-result" hidden></div>
+            </article>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Recorded runs</h2><p>Stored in the database, newest first</p></div>
+                    <span class="mono" id="bt-count">—</span>
+                </header>
+                <div class="table-wrap">
+                    <table class="table" id="bt-table">
+                        <thead><tr><th>Run</th><th>Window</th><th class="right">Trades</th><th class="right">Win rate</th><th class="right">Total R</th><th class="right">Max DD (R)</th><th>Created</th></tr></thead>
+                        <tbody><tr><td colspan="7" class="empty">No backtests recorded yet</td></tr></tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <!-- ── CONNECTION ───────────────────────────────────────── -->
+        <section class="page" id="page-connection">
+            <div class="banner banner-warn" id="connection-banner" hidden></div>
+            <div class="grid grid-3">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Session</h2><p>Terminal and account identity</p></div></header>
+                    <dl class="detail-list" id="connection-account"></dl>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Feed health</h2><p>Quote freshness and reconnects</p></div></header>
+                    <dl class="detail-list" id="connection-feed"></dl>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Symbol</h2><p>Tradability rules applied by the gate</p></div></header>
+                    <dl class="detail-list" id="connection-symbol"></dl>
+                </article>
+            </div>
+            <article class="panel">
+                <header class="panel-head"><div><h2>Readiness checks</h2><p>Why the engine would refuse a new order</p></div></header>
+                <div id="connection-issues" class="issue-list"></div>
+            </article>
+        </section>
+
+        <!-- ── LOGS & HEALTH ────────────────────────────────────── -->
+        <section class="page" id="page-logs">
+            <div class="grid grid-3" id="health-cards">
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Database</h2><p>SQLite file and pragmas</p></div></header>
+                    <dl class="detail-list" id="health-db"></dl>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Rows</h2><p>What each table holds</p></div></header>
+                    <dl class="detail-list" id="health-counts"></dl>
+                </article>
+                <article class="panel">
+                    <header class="panel-head"><div><h2>Engine</h2><p>Loop and ML gate state</p></div></header>
+                    <dl class="detail-list" id="health-engine"></dl>
+                </article>
+            </div>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <div><h2>Event log</h2><p>Operational and risk events written by the engine</p></div>
+                    <div class="filters inline">
+                        <select id="log-kind">
+                            <option value="system">System</option>
+                            <option value="risk">Risk</option>
+                        </select>
+                        <select id="log-level">
+                            <option value="">All levels</option>
+                            <option value="info">Info</option>
+                            <option value="warning">Warning</option>
+                            <option value="error">Error</option>
+                        </select>
+                        <button class="btn btn-ghost btn-sm" id="log-refresh">Refresh</button>
+                    </div>
+                </header>
+                <div class="table-wrap">
+                    <table class="table" id="logs-table">
+                        <thead><tr><th>Time</th><th>Level</th><th>Category</th><th>Source</th><th>Message</th></tr></thead>
+                        <tbody><tr><td colspan="5" class="empty">No events recorded</td></tr></tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <!-- ── GRAPH ────────────────────────────────────────────── -->
+        <section class="page" id="page-graph">
+            <article class="panel">
+                <header class="panel-head"><div><h2>Chart analysis</h2><p>Upload a chart image for a structural read</p></div></header>
+                <form id="graph-form" class="upload">
+                    <input id="graph-file" type="file" name="file" accept="image/*" required>
+                    <button class="btn btn-primary btn-sm" type="submit">Analyse chart</button>
+                </form>
+                <img id="graph-preview" class="graph-preview" alt="Uploaded chart preview" hidden>
+                <dl class="detail-list detail-grid" id="graph-result"></dl>
+            </article>
+        </section>
+
+        <!-- ── SHARE ────────────────────────────────────────────── -->
+        <section class="page" id="page-share">
+            <article class="panel">
+                <header class="panel-head"><div><h2>Running this terminal elsewhere</h2><p>Same engine, same database, same page</p></div></header>
+                <ol class="steps">
+                    <li><span>1</span>Copy the <code>Iron Scalper</code> folder to the target machine.</li>
+                    <li><span>2</span>Install Python 3.10+ and a signed-in MetaTrader 5 terminal.</li>
+                    <li><span>3</span><code>pip install -r requirements.txt</code></li>
+                    <li><span>4</span><code>python src/engine/web_dashboard.py</code></li>
+                    <li><span>5</span>Open <code>http://localhost:5000</code> and sign in.</li>
+                    <li><span>6</span>Log into the MT5 demo account, then start the engine here.</li>
+                </ol>
+                <p class="panel-note">The database lives in <code>data/iron_scalper.db</code>. Copy it with the folder to keep the trade record.</p>
+            </article>
+        </section>
+    </main>
+</div>
+
+<!-- ── trade detail drawer ──────────────────────────────────── -->
+<div class="drawer-scrim" id="drawer-scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Trade detail">
+    <header class="drawer-head">
+        <div>
+            <h2 id="drawer-title">Trade</h2>
+            <p id="drawer-sub">Execution detail</p>
+        </div>
+        <button class="icon-btn" id="drawer-close" aria-label="Close">✕</button>
+    </header>
+    <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<div class="tooltip" id="tooltip" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,448 @@
+{
+  "versions": [
+    {
+      "version": "ml-v1-20261125T084044Z-74f153aec548ef57",
+      "path": "models/signal_filter.json",
+      "trained_at": "2026-11-25T08:40:44+00:00",
+      "data": {
+        "source": "data\\raw\\XAUUSD_M5.csv",
+        "fingerprint": "74f153aec548ef57",
+        "bars": 50000,
+        "first": "2025-11-14T01:40:00+00:00",
+        "last": "2026-08-06T15:20:00+00:00"
+      },
+      "samples": {
+        "signals": 1459,
+        "trainable": 1265,
+        "wins": 452,
+        "losses": 818,
+        "timeouts": 189
+      },
+      "out_of_sample": {
+        "classification": {
+          "samples": 1057,
+          "accuracy": 0.6121,
+          "precision": 0.431,
+          "recall": 0.2732,
+          "f1": 0.3344,
+          "auc": 0.5487,
+          "brier": 0.242,
+          "base_rate": 0.3567,
+          "predicted_positive_rate": 0.2261,
+          "true_positive": 103,
+          "false_positive": 136,
+          "false_negative": 274,
+          "true_negative": 544
+        },
+        "baseline": {
+          "trades": 1215,
+          "wins": 471,
+          "win_rate": 0.3877,
+          "avg_r": -0.0224,
+          "total_r": -27.167,
+          "profit_factor": 0.961,
+          "max_drawdown_r": -64.535
+        },
+        "gated": {
+          "trades": 297,
+          "wins": 132,
+          "win_rate": 0.4444,
+          "avg_r": 0.1275,
+          "total_r": 37.873,
+          "profit_factor": 1.261,
+          "max_drawdown_r": -12.927
+        },
+        "take_rate": 0.2444,
+        "skipped": {
+          "trades": 918,
+          "wins": 339,
+          "win_rate": 0.3693,
+          "avg_r": -0.0708,
+          "total_r": -65.04,
+          "profit_factor": 0.883,
+          "max_drawdown_r": -89.954
+        },
+        "confidence_bands": [
+          {
+            "band": "0.0-0.4",
+            "trades": 601,
+            "win_rate": 0.3577,
+            "avg_r": -0.1016
+          },
+          {
+            "band": "0.4-0.5",
+            "trades": 317,
+            "win_rate": 0.3912,
+            "avg_r": -0.0125
+          },
+          {
+            "band": "0.5-0.6",
+            "trades": 167,
+            "win_rate": 0.485,
+            "avg_r": 0.235
+          },
+          {
+            "band": "0.6-0.7",
+            "trades": 67,
+            "win_rate": 0.4328,
+            "avg_r": 0.1267
+          },
+          {
+            "band": "0.7-0.8",
+            "trades": 39,
+            "win_rate": 0.359,
+            "avg_r": -0.1191
+          },
+          {
+            "band": "0.8-1.0",
+            "trades": 24,
+            "win_rate": 0.3333,
+            "avg_r": -0.2176
+          }
+        ],
+        "folds_scored": 5,
+        "uplift": {
+          "avg_r_delta": 0.1499,
+          "win_rate_delta": 0.0567,
+          "total_r_delta": 65.04,
+          "trades_kept": 297,
+          "trades_baseline": 1215
+        }
+      },
+      "threshold": 0.5
+    },
+    {
+      "version": "ml-v1-20261125T082332Z-74f153aec548ef57",
+      "path": "models/signal_filter.json",
+      "trained_at": "2026-11-25T08:23:32+00:00",
+      "data": {
+        "source": "data\\raw\\XAUUSD_M5.csv",
+        "fingerprint": "74f153aec548ef57",
+        "bars": 50000,
+        "first": "2025-11-14T01:40:00+00:00",
+        "last": "2026-08-06T15:20:00+00:00"
+      },
+      "samples": {
+        "signals": 1459,
+        "trainable": 1265,
+        "wins": 452,
+        "losses": 818,
+        "timeouts": 189
+      },
+      "out_of_sample": {
+        "classification": {
+          "samples": 1057,
+          "accuracy": 0.6121,
+          "precision": 0.431,
+          "recall": 0.2732,
+          "f1": 0.3344,
+          "auc": 0.5487,
+          "brier": 0.242,
+          "base_rate": 0.3567,
+          "predicted_positive_rate": 0.2261,
+          "true_positive": 103,
+          "false_positive": 136,
+          "false_negative": 274,
+          "true_negative": 544
+        },
+        "baseline": {
+          "trades": 1215,
+          "wins": 471,
+          "win_rate": 0.3877,
+          "avg_r": -0.0224,
+          "total_r": -27.167,
+          "profit_factor": 0.961,
+          "max_drawdown_r": -64.535
+        },
+        "gated": {
+          "trades": 297,
+          "wins": 132,
+          "win_rate": 0.4444,
+          "avg_r": 0.1275,
+          "total_r": 37.873,
+          "profit_factor": 1.261,
+          "max_drawdown_r": -12.927
+        },
+        "take_rate": 0.2444,
+        "skipped": {
+          "trades": 918,
+          "wins": 339,
+          "win_rate": 0.3693,
+          "avg_r": -0.0708,
+          "total_r": -65.04,
+          "profit_factor": 0.883,
+          "max_drawdown_r": -89.954
+        },
+        "confidence_bands": [
+          {
+            "band": "0.0-0.4",
+            "trades": 601,
+            "win_rate": 0.3577,
+            "avg_r": -0.1016
+          },
+          {
+            "band": "0.4-0.5",
+            "trades": 317,
+            "win_rate": 0.3912,
+            "avg_r": -0.0125
+          },
+          {
+            "band": "0.5-0.6",
+            "trades": 167,
+            "win_rate": 0.485,
+            "avg_r": 0.235
+          },
+          {
+            "band": "0.6-0.7",
+            "trades": 67,
+            "win_rate": 0.4328,
+            "avg_r": 0.1267
+          },
+          {
+            "band": "0.7-0.8",
+            "trades": 39,
+            "win_rate": 0.359,
+            "avg_r": -0.1191
+          },
+          {
+            "band": "0.8-1.0",
+            "trades": 24,
+            "win_rate": 0.3333,
+            "avg_r": -0.2176
+          }
+        ],
+        "folds_scored": 5,
+        "uplift": {
+          "avg_r_delta": 0.1499,
+          "win_rate_delta": 0.0567,
+          "total_r_delta": 65.04,
+          "trades_kept": 297,
+          "trades_baseline": 1215
+        }
+      },
+      "threshold": 0.5
+    },
+    {
+      "version": "ml-v1-20261125T081857Z-74f153aec548ef57",
+      "path": "models/signal_filter.json",
+      "trained_at": "2026-11-25T08:18:57+00:00",
+      "data": {
+        "source": "data\\raw\\XAUUSD_M5.csv",
+        "fingerprint": "74f153aec548ef57",
+        "bars": 50000,
+        "first": "2025-11-14T01:40:00+00:00",
+        "last": "2026-08-06T15:20:00+00:00"
+      },
+      "samples": {
+        "signals": 1459,
+        "trainable": 1265,
+        "wins": 452,
+        "losses": 818,
+        "timeouts": 189
+      },
+      "out_of_sample": {
+        "classification": {
+          "samples": 1057,
+          "accuracy": 0.6121,
+          "precision": 0.431,
+          "recall": 0.2732,
+          "f1": 0.3344,
+          "auc": 0.5487,
+          "brier": 0.242,
+          "base_rate": 0.3567,
+          "predicted_positive_rate": 0.2261,
+          "true_positive": 103,
+          "false_positive": 136,
+          "false_negative": 274,
+          "true_negative": 544
+        },
+        "baseline": {
+          "trades": 1215,
+          "wins": 471,
+          "win_rate": 0.3877,
+          "avg_r": -0.0224,
+          "total_r": -27.167,
+          "profit_factor": 0.961,
+          "max_drawdown_r": -64.535
+        },
+        "gated": {
+          "trades": 297,
+          "wins": 132,
+          "win_rate": 0.4444,
+          "avg_r": 0.1275,
+          "total_r": 37.873,
+          "profit_factor": 1.261,
+          "max_drawdown_r": -12.927
+        },
+        "take_rate": 0.2444,
+        "skipped": {
+          "trades": 918,
+          "wins": 339,
+          "win_rate": 0.3693,
+          "avg_r": -0.0708,
+          "total_r": -65.04,
+          "profit_factor": 0.883,
+          "max_drawdown_r": -89.954
+        },
+        "confidence_bands": [
+          {
+            "band": "0.0-0.4",
+            "trades": 601,
+            "win_rate": 0.3577,
+            "avg_r": -0.1016
+          },
+          {
+            "band": "0.4-0.5",
+            "trades": 317,
+            "win_rate": 0.3912,
+            "avg_r": -0.0125
+          },
+          {
+            "band": "0.5-0.6",
+            "trades": 167,
+            "win_rate": 0.485,
+            "avg_r": 0.235
+          },
+          {
+            "band": "0.6-0.7",
+            "trades": 67,
+            "win_rate": 0.4328,
+            "avg_r": 0.1267
+          },
+          {
+            "band": "0.7-0.8",
+            "trades": 39,
+            "win_rate": 0.359,
+            "avg_r": -0.1191
+          },
+          {
+            "band": "0.8-1.0",
+            "trades": 24,
+            "win_rate": 0.3333,
+            "avg_r": -0.2176
+          }
+        ],
+        "folds_scored": 5,
+        "uplift": {
+          "avg_r_delta": 0.1499,
+          "win_rate_delta": 0.0567,
+          "total_r_delta": 65.04,
+          "trades_kept": 297,
+          "trades_baseline": 1215
+        }
+      },
+      "threshold": 0.5
+    },
+    {
+      "version": "ml-v1-20261125T081633Z-74f153aec548ef57",
+      "path": "models/signal_filter.json",
+      "trained_at": "2026-11-25T08:16:33+00:00",
+      "data": {
+        "source": "data\\raw\\XAUUSD_M5.csv",
+        "fingerprint": "74f153aec548ef57",
+        "bars": 50000,
+        "first": "2025-11-14T01:40:00+00:00",
+        "last": "2026-08-06T15:20:00+00:00"
+      },
+      "samples": {
+        "signals": 1459,
+        "trainable": 1265,
+        "wins": 452,
+        "losses": 818,
+        "timeouts": 189
+      },
+      "out_of_sample": {
+        "classification": {
+          "samples": 1057,
+          "accuracy": 0.5922,
+          "precision": 0.4206,
+          "recall": 0.3793,
+          "f1": 0.3989,
+          "auc": 0.5498,
+          "brier": 0.2724,
+          "base_rate": 0.3567,
+          "predicted_positive_rate": 0.3217,
+          "true_positive": 143,
+          "false_positive": 197,
+          "false_negative": 234,
+          "true_negative": 483
+        },
+        "baseline": {
+          "trades": 1215,
+          "wins": 471,
+          "win_rate": 0.3877,
+          "avg_r": -0.0224,
+          "total_r": -27.167,
+          "profit_factor": 0.961,
+          "max_drawdown_r": -64.535
+        },
+        "gated": {
+          "trades": 405,
+          "wins": 177,
+          "win_rate": 0.437,
+          "avg_r": 0.115,
+          "total_r": 46.574,
+          "profit_factor": 1.224,
+          "max_drawdown_r": -16.626
+        },
+        "take_rate": 0.3333,
+        "skipped": {
+          "trades": 810,
+          "wins": 294,
+          "win_rate": 0.363,
+          "avg_r": -0.091,
+          "total_r": -73.741,
+          "profit_factor": 0.851,
+          "max_drawdown_r": -95.845
+        },
+        "confidence_bands": [
+          {
+            "band": "0.0-0.4",
+            "trades": 201,
+            "win_rate": 0.3632,
+            "avg_r": -0.0876
+          },
+          {
+            "band": "0.4-0.5",
+            "trades": 269,
+            "win_rate": 0.3457,
+            "avg_r": -0.1315
+          },
+          {
+            "band": "0.5-0.6",
+            "trades": 340,
+            "win_rate": 0.3765,
+            "avg_r": -0.0611
+          },
+          {
+            "band": "0.6-0.7",
+            "trades": 222,
+            "win_rate": 0.4279,
+            "avg_r": 0.0983
+          },
+          {
+            "band": "0.7-0.8",
+            "trades": 114,
+            "win_rate": 0.5088,
+            "avg_r": 0.3012
+          },
+          {
+            "band": "0.8-1.0",
+            "trades": 69,
+            "win_rate": 0.3478,
+            "avg_r": -0.1389
+          }
+        ],
+        "folds_scored": 5,
+        "uplift": {
+          "avg_r_delta": 0.1374,
+          "win_rate_delta": 0.0493,
+          "total_r_delta": 73.741,
+          "trades_kept": 405,
+          "trades_baseline": 1215
+        }
+      },
+      "threshold": 0.6
+    }
+  ]
+}

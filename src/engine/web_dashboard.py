@@ -36,6 +36,8 @@ state = {
     "pending_orders": [], "manual_positions": 0,
     # Published by the engine at startup: the configuration it trades with.
     "config": {},
+    # Published by the engine when an ML gate is configured or active.
+    "ml": {},
 }
 
 trader_instance = None
@@ -315,6 +317,7 @@ HTML = r'''
     <a href="#" onclick="showPage('signals', this)">Signals</a>
     <a href="#" onclick="showPage('history', this)">History</a>
     <a href="#" onclick="showPage('graph', this)">Graph Analysis</a>
+    <a href="#" onclick="showPage('ml', this)">Machine Learning</a>
     <a href="#" onclick="showPage('settings', this)">Settings</a>
     <a href="#" onclick="showPage('share', this)">Share</a>
     <a href="/logout" class="logout-link" onclick="return confirm('Are you sure you want to logout?')">Logout</a>
@@ -415,6 +418,43 @@ HTML = r'''
         </div>
     </div>
     
+    <!-- MACHINE LEARNING PAGE -->
+    <div class="page" id="page-ml">
+        <div class="section">
+            <h3>Signal Filter</h3>
+            <div id="ml-status" style="padding:10px 16px;font-size:11px;color:var(--muted);">Loading model status…</div>
+            <table>
+                <thead><tr><th>Field</th><th>Value</th><th>Field</th><th>Value</th></tr></thead>
+                <tbody id="ml-model"><tr><td colspan="4" style="text-align:center;color:var(--muted);">Loading…</td></tr></tbody>
+            </table>
+        </div>
+        <div class="section">
+            <h3>Out of Sample (walk-forward)</h3>
+            <table>
+                <thead><tr><th>Measure</th><th>Rule-based</th><th>After gate</th></tr></thead>
+                <tbody id="ml-oos"><tr><td colspan="3" style="text-align:center;color:var(--muted);">No model trained yet</td></tr></tbody>
+            </table>
+            <table style="margin-top:12px;">
+                <thead><tr><th>Classifier</th><th>Value</th></tr></thead>
+                <tbody id="ml-classifier"><tr><td colspan="2" style="text-align:center;color:var(--muted);">--</td></tr></tbody>
+            </table>
+        </div>
+        <div class="section">
+            <h3>Win Rate by Predicted Confidence</h3>
+            <table>
+                <thead><tr><th>Band</th><th>Trades</th><th>Win rate</th><th>Avg R</th></tr></thead>
+                <tbody id="ml-bands"><tr><td colspan="4" style="text-align:center;color:var(--muted);">No predictions yet</td></tr></tbody>
+            </table>
+        </div>
+        <div class="section">
+            <h3>Live Predictions</h3>
+            <table>
+                <thead><tr><th>Measure</th><th>Value</th><th>Measure</th><th>Value</th></tr></thead>
+                <tbody id="ml-monitor"><tr><td colspan="4" style="text-align:center;color:var(--muted);">No live predictions yet</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+
     <!-- SETTINGS PAGE -->
     <div class="page" id="page-settings">
         <div class="section">
@@ -464,6 +504,7 @@ function showPage(name, el) {
     document.getElementById('page-' + name).classList.add('active');
     document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
     if (el) el.classList.add('active');
+    if (name === 'ml') loadMl(true);
     closeSidebar();
 }
 
@@ -618,7 +659,12 @@ var CONFIG_GROUPS = [
         ['rsi_short_min', 'RSI short min'], ['rsi_short_max', 'RSI short max'],
         ['min_bar_spacing', 'Bars between entries']]],
     ['Machine learning', 'ml', [
-        ['enabled', 'Gate enabled'], ['confidence_min', 'Min confidence'], ['model_path', 'Model path']]]
+        ['enabled', 'Gate enabled'], ['confidence_min', 'Min confidence (calibrated)'],
+        ['model_path', 'Model path'], ['data_path', 'Training history'],
+        ['horizon_bars', 'Label horizon (bars)'], ['embargo_bars', 'Fold embargo (bars)'],
+        ['folds', 'Walk-forward folds'], ['min_train_signals', 'Min training signals'],
+        ['l2', 'Ridge penalty'], ['epochs', 'Training epochs'],
+        ['monitor_days', 'Monitoring window (days)']]]
 ];
 
 function configValue(key, value) {
@@ -671,6 +717,158 @@ function loadConfig(running) {
     });
 }
 
+var mlLoadedAt = 0;
+
+function mlNumber(value, places) {
+    if (value === undefined || value === null || value === '') return '--';
+    return Number(value).toFixed(places === undefined ? 2 : places);
+}
+
+function mlPercent(value) {
+    if (value === undefined || value === null || value === '') return '--';
+    return (Number(value) * 100).toFixed(1) + '%';
+}
+
+function renderMl(payload) {
+    var status = payload.status || {};
+    var monitorData = payload.monitor || {};
+    var latest = payload.registry || {};
+    var model = status.model || {};
+    var oos = (model.out_of_sample && model.out_of_sample.baseline) ? model.out_of_sample : (latest.out_of_sample || {});
+    var samples = model.samples || latest.samples || {};
+    var data = model.data || latest.data || {};
+
+    var statusEl = document.getElementById('ml-status');
+    if (statusEl) {
+        if (!status.enabled) {
+            statusEl.textContent = 'The gate is disabled in config/settings.py, so every strategy signal still trades. ' +
+                'The numbers below describe the model that would filter them.';
+        } else if (status.active) {
+            statusEl.textContent = 'The gate is active: signals below the threshold are skipped before the risk manager sees them.';
+        } else {
+            statusEl.textContent = 'The gate is enabled but not active: ' + (status.reason || 'model unavailable') +
+                '. Entries are blocked until it can load.';
+        }
+    }
+
+    var rows = [];
+    function add(label, value) {
+        if (value === undefined || value === null || value === '') return;
+        rows.push([label, String(value)]);
+    }
+    add('Version', model.version || latest.version);
+    add('Threshold', mlPercent(model.threshold || latest.threshold));
+    add('Trained', String(model.trained_at || latest.trained_at || '').replace('T', ' '));
+    add('History', data.bars ? data.bars + ' bars' : '');
+    add('Period', data.first && data.last ? data.first.slice(0, 10) + ' to ' + data.last.slice(0, 10) : '');
+    add('Signals', samples.signals);
+    add('Labels', samples.trainable ? samples.wins + ' win / ' + samples.losses + ' loss' : '');
+    add('Timeouts', samples.timeouts);
+    add('Scored this session', status.ml_seen);
+    add('Skipped', status.ml_skipped);
+    if (status.ml_last && status.ml_last.time) {
+        add('Last signal', status.ml_last.strategy + ' ' + status.ml_last.type + ' at ' + status.ml_last.time);
+        add('Last score', mlPercent(status.ml_last.probability) + (status.ml_last.taken ? ' (taken)' : ' (skipped)'));
+    }
+    var modelBody = document.getElementById('ml-model');
+    if (modelBody) modelBody.innerHTML = pairsTable(rows, 'No model saved yet. Run: python train_ml.py --train');
+
+    var baseline = oos.baseline || {}, gated = oos.gated || {};
+    var oosRows = [
+        ['Trades', baseline.trades, gated.trades],
+        ['Win rate', mlPercent(baseline.win_rate), mlPercent(gated.win_rate)],
+        ['Expectancy (R)', mlNumber(baseline.avg_r, 3), mlNumber(gated.avg_r, 3)],
+        ['Total R', mlNumber(baseline.total_r, 2), mlNumber(gated.total_r, 2)],
+        ['Max drawdown (R)', mlNumber(baseline.max_drawdown_r, 2), mlNumber(gated.max_drawdown_r, 2)],
+        ['Take rate', oos.take_rate === undefined ? '--' : mlPercent(oos.take_rate), '']
+    ];
+    var oosBody = document.getElementById('ml-oos');
+    if (oosBody) {
+        if (!baseline.trades) {
+            oosBody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);">No model trained yet</td></tr>';
+        } else {
+            oosBody.innerHTML = oosRows.map(function(r) {
+                return '<tr><td style="color:var(--muted);">' + r[0] + '</td><td>' + r[1] + '</td><td>' + r[2] + '</td></tr>';
+            }).join('');
+        }
+    }
+
+    var classifier = oos.classification || {};
+    var classBody = document.getElementById('ml-classifier');
+    if (classBody) {
+        if (!classifier.samples) {
+            classBody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--muted);">--</td></tr>';
+        } else {
+            classBody.innerHTML = [
+                ['Accuracy', mlNumber(classifier.accuracy, 3) + '  (base rate ' + mlNumber(classifier.base_rate, 3) + ')'],
+                ['Precision', mlNumber(classifier.precision, 3)],
+                ['Recall', mlNumber(classifier.recall, 3)],
+                ['F1', mlNumber(classifier.f1, 3)],
+                ['AUC', mlNumber(classifier.auc, 3)],
+                ['Brier', mlNumber(classifier.brier, 3)]
+            ].map(function(r) {
+                return '<tr><td style="color:var(--muted);">' + r[0] + '</td><td>' + r[1] + '</td></tr>';
+            }).join('');
+        }
+    }
+
+    var bands = (oos.confidence_bands && oos.confidence_bands.length) ? oos.confidence_bands : (monitorData.by_confidence || []);
+    var bandBody = document.getElementById('ml-bands');
+    if (bandBody) {
+        if (!bands.length) {
+            bandBody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No predictions yet</td></tr>';
+        } else {
+            bandBody.innerHTML = bands.map(function(b) {
+                var cls = b.avg_r >= 0 ? 'green-text' : 'red-text';
+                return '<tr><td>' + b.band + '</td><td>' + b.trades + '</td><td>' + mlPercent(b.win_rate) +
+                       '</td><td class="' + cls + '">' + mlNumber(b.avg_r, 3) + '</td></tr>';
+            }).join('');
+        }
+    }
+
+    var live = [];
+    function addLive(label, value) {
+        if (value === undefined || value === null || value === '') return;
+        live.push([label, String(value)]);
+    }
+    var classification = monitorData.live_classification || {};
+    var taken = monitorData.taken_economics || {};
+    addLive('Predictions', monitorData.predictions);
+    addLive('Taken', monitorData.taken);
+    addLive('Skipped', monitorData.skipped);
+    addLive('Settled trades', monitorData.settled_trades);
+    // Nothing has been measured until a prediction exists; zeros would read
+    // like a failing model rather than an empty log.
+    if (monitorData.predictions) {
+        addLive('Mean score', mlPercent(monitorData.mean_probability));
+        addLive('Live precision', classification.samples ? mlPercent(classification.precision) : '');
+        addLive('Live recall', classification.samples ? mlPercent(classification.recall) : '');
+        addLive('Live F1', classification.samples ? mlNumber(classification.f1, 3) : '');
+        addLive('Taken win rate', taken.trades ? mlPercent(taken.win_rate) : '');
+        addLive('Taken avg R', taken.trades ? mlNumber(taken.avg_r, 3) : '');
+        addLive('Taken total R', taken.trades ? mlNumber(taken.total_r, 2) : '');
+    }
+    addLive('Window', monitorData.window_days ? monitorData.window_days + ' days' : '');
+    if (monitorData.error) addLive('Error', monitorData.error);
+
+    var monitorBody = document.getElementById('ml-monitor');
+    if (monitorBody) {
+        monitorBody.innerHTML = live.length
+            ? pairsTable(live, 'No live predictions yet')
+            : '<tr><td colspan="4" style="text-align:center;color:var(--muted);">No live predictions yet</td></tr>';
+    }
+}
+
+function loadMl(force) {
+    var now = Date.now();
+    if (!force && now - mlLoadedAt < 30000) return;
+    mlLoadedAt = now;
+    fetch('/api/ml').then(function(response) { return response.json(); }).then(renderMl).catch(function() {
+        var statusEl = document.getElementById('ml-status');
+        if (statusEl) statusEl.textContent = 'Could not load the model status.';
+    });
+}
+
 function renderConn(d) {
     var el = document.getElementById('conn');
     if (!el) return;
@@ -698,6 +896,7 @@ s.on('state_update', d => {
     renderConn(d);
     renderMt5(d);
     loadConfig(d.running);
+    loadMl(false);
     
     document.getElementById('bal').textContent = '$' + (d.balance || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
     
@@ -926,6 +1125,37 @@ def api_trades():
 def api_config():
     """Return the configuration the trading engine is actually using."""
     return jsonify(_config_payload())
+
+
+@app.route('/api/ml')
+@login_required
+def api_ml():
+    """Model version, walk-forward record and live prediction performance."""
+    from src.ml import monitor as ml_monitor
+
+    with state_lock:
+        status = dict(state.get("ml") or {})
+
+    registry_path = os.path.join(os.path.dirname(CONFIG.ml.model_path), "registry.json")
+    latest = ml_monitor.latest_model(registry_path)
+    try:
+        live = ml_monitor.summary(CONFIG.ml.monitor_days)
+    except Exception as error:
+        live = {"error": str(error), "predictions": 0}
+
+    return jsonify({
+        "status": status,
+        "registry": latest,
+        "monitor": live,
+        "configured": {
+            "enabled": CONFIG.ml.enabled,
+            "confidence_min": CONFIG.ml.confidence_min,
+            "model_path": CONFIG.ml.model_path,
+            "horizon_bars": CONFIG.ml.horizon_bars,
+            "folds": CONFIG.ml.folds,
+            "monitor_days": CONFIG.ml.monitor_days,
+        },
+    })
 
 
 @app.route('/upload_graph', methods=['POST'])

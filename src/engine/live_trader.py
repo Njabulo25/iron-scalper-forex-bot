@@ -36,11 +36,25 @@ from src.engine.database import (
     get_day_state,
     get_open_trade_by_position,
     get_open_trades,
+    get_prediction,
+    get_signal,
     init_db,
+    link_prediction_to_trade,
+    log_execution,
+    log_prediction,
+    log_risk_event,
     log_signal,
+    log_system_event,
     log_trade_close,
     log_trade_open,
+    mark_signal_traded,
+    record_trading_settings,
+    refresh_strategy_performance,
+    resolve_prediction,
+    set_active_model,
 )
+from src.ml.features import Bars, FEATURE_NAMES, SIGNAL_FEATURES, build_features
+from src.ml.gate import MLGate, Prediction
 from src.strategies.daily_breakout import DailyBreakout
 from src.strategies.london_scalper import LondonScalper
 from src.strategies.risk_manager import RiskManager
@@ -115,6 +129,26 @@ class LiveTrader:
             "terminal": {}, "account": {}, "symbol": {},
         }
 
+        # ML gate: loaded only when configured. When enabled, a model that
+        # cannot be loaded blocks entries instead of silently reverting to
+        # ungated trading - a configuration that says "filter" must not trade
+        # unfiltered because of a missing file.
+        self.gate = None
+        self._ml_blocked = False
+        self._ml_logged = set()
+        self._ml_seen = 0
+        self._ml_skipped = 0
+        self._ml_last = None
+        self._feature_bar = None
+        self._feature_positions = {}
+        self._ml_status = {
+            "enabled": bool(self.config.ml.enabled),
+            "active": False,
+            "threshold": self.config.ml.confidence_min,
+            "reason": "disabled in config/settings.py",
+            "model": {},
+        }
+
         self._load_state()
 
         risk = self.config.risk
@@ -162,6 +196,7 @@ class LiveTrader:
 
         self._readiness = self.broker.readiness()
         self._publish_config()
+        self._record_startup(snapshot)
         self._sync_positions(snapshot, force=True)
         self._publish_connection(snapshot)
 
@@ -177,12 +212,237 @@ class LiveTrader:
         )
         for issue in self._readiness.get("issues") or []:
             self.log.warning("MT5 is not ready to trade: %s", issue)
-        if self.config.ml.enabled:
-            # No model exists yet, so the threshold cannot filter anything.
-            self.log.warning(
-                "ml.enabled is on but no model is implemented; the confidence "
-                "gate is not applied"
+        self._load_ml()
+
+    # ── Machine-learning gate ──────────────────────────────────────
+
+    def _load_ml(self):
+        """Load the configured model; fail closed when it is missing."""
+        if not self.config.ml.enabled:
+            self._publish_ml()
+            return
+
+        path = Path(self.config.ml.model_path)
+        if not path.exists():
+            self._ml_blocked = True
+            self._ml_status.update({
+                "active": False,
+                "reason": f"model {path} not found - train it with train_ml.py",
+            })
+            self.log.error(
+                "ml.enabled is on but %s does not exist; entries are blocked "
+                "until a model is trained (train_ml.py --train)", path,
             )
+            self._publish_ml()
+            return
+
+        try:
+            self.gate = MLGate.load(path, threshold=self.config.ml.confidence_min)
+        except Exception as error:
+            self._ml_blocked = True
+            self._ml_status.update({
+                "active": False, "reason": f"model could not be loaded: {error}",
+            })
+            self.log.exception("ml.enabled is on but the model cannot be loaded")
+            self._publish_ml()
+            return
+
+        missing = set(FEATURE_NAMES) | set(SIGNAL_FEATURES)
+        missing -= set(self.gate.model.feature_names)
+        if missing:
+            self._ml_blocked = True
+            self._ml_status.update({
+                "active": False,
+                "reason": "model is missing features: " + ", ".join(sorted(missing)),
+            })
+            self.log.error("ML model feature mismatch: missing %s", sorted(missing))
+            self._publish_ml()
+            return
+
+        self._ml_status.update({
+            "active": True,
+            "reason": "",
+            "model": self.gate.summary(),
+        })
+        self._db_safe("activate model", set_active_model, self.gate.version)
+        self._db_safe(
+            "model load event", log_system_event,
+            f"ML gate active with {self.gate.version}",
+            level="info", category="ml",
+            detail={"threshold": self.gate.threshold},
+        )
+        self.log.info(
+            "ML gate active: %s at threshold %.2f (%d features)",
+            self.gate.version, self.gate.threshold,
+            len(self.gate.model.feature_names),
+        )
+        self._publish_ml()
+
+    def _db_safe(self, action, function, *args, **kwargs):
+        """Write to the database without letting a locked file stop trading."""
+        try:
+            return function(*args, **kwargs)
+        except Exception:
+            self.log.exception("Database write failed: %s", action)
+            return None
+
+    def _record_startup(self, snapshot):
+        """Record the configuration this run was built with, and the start event.
+
+        ``trading_settings`` holds immutable snapshots, never the live values: a
+        trade can always be traced back to the settings the engine started with.
+        """
+        self._db_safe(
+            "trading settings", record_trading_settings, self.config.snapshot(),
+            source="config/settings.py",
+            note=f"engine start {self._today()}",
+        )
+        identity = self._readiness.get("account") or {}
+        self._db_safe(
+            "startup event", log_system_event,
+            "Trading engine started",
+            level="info", category="lifecycle",
+            detail={
+                "symbol": self.config.mt5.symbol,
+                "login": identity.get("login"),
+                "server": identity.get("server"),
+                "balance": getattr(snapshot.account, "balance", None),
+                "ml_enabled": self.config.ml.enabled,
+            },
+        )
+
+    def _publish_ml(self):
+        if self.web_state is None:
+            return
+        payload = dict(self._ml_status)
+        payload.update({
+            "ml_blocked": self._ml_blocked,
+            "ml_seen": self._ml_seen,
+            "ml_skipped": self._ml_skipped,
+            "ml_last": self._ml_last or {},
+        })
+        with self._state_lock:
+            self.web_state["ml"] = payload
+
+    def _feature_row(self, trade, frame):
+        """Features at the bar that produced ``trade``, or ``None``.
+
+        The row is built from the same DataFrame the strategy read, keyed by
+        that bar's own timestamp, so a signal a few bars old is scored with its
+        own features rather than with the newest bar's.
+        """
+        if frame is None or not len(frame):
+            return None
+
+        token = frame["time"].iloc[-1]
+        if token != self._feature_bar:
+            self._feature_bar = token
+            try:
+                bars = Bars.from_columns(frame, symbol=self.config.mt5.symbol)
+                self._feature_values = build_features(bars, self.config)
+                self._feature_positions = {
+                    value: index for index, value in enumerate(frame["time"])
+                }
+            except Exception:
+                self.log.exception("Could not build ML features")
+                self._feature_values = None
+                self._feature_positions = {}
+
+        if not getattr(self, "_feature_values", None):
+            return None
+
+        index = self._feature_positions.get(trade["time"])
+        if index is None:
+            return None
+
+        row = {
+            name: float(self._feature_values[name][index]) for name in FEATURE_NAMES
+        }
+        row["strategy_scalper"] = 1.0 if trade.get("strategy") == "SCALPER" else 0.0
+        row["side_buy"] = 1.0 if trade["type"] == "BUY" else 0.0
+        return row
+
+    def _ml_decision(self, trade, frame):
+        """Ask the gate about one signal. Returns ``(allowed, prediction)``.
+
+        This function only produces a decision. No order is sent here and the
+        gate holds no broker reference; an allowed signal continues into
+        ``place_trade`` where the spread, risk and volume checks still apply.
+        """
+        if self._ml_blocked:
+            return False, Prediction(
+                False, 0.0, self.config.ml.confidence_min,
+                self._ml_status.get("reason") or "ML gate unavailable", "none",
+            )
+        if self.gate is None:
+            return True, None
+
+        row = self._feature_row(trade, frame)
+        if row is None:
+            prediction = Prediction(
+                False, 0.0, self.config.ml.confidence_min,
+                "no feature row for this signal bar", self.gate.version,
+            )
+        else:
+            prediction = self.gate.decide(row)
+
+        key = self._signal_key(trade)
+        self._ml_seen += 1
+        if key not in self._ml_logged:
+            self._ml_logged.add(key)
+            try:
+                log_prediction(
+                    key, prediction.model_version, trade.get("strategy", "?"),
+                    self.config.mt5.symbol, trade["type"],
+                    trade["time"].strftime("%Y-%m-%d %H:%M:%S"),
+                    prediction.probability, prediction.threshold,
+                    "taken" if prediction.taken else "skipped",
+                    features=row,
+                )
+            except Exception:
+                self.log.exception("Could not log the ML prediction")
+
+        if not prediction.taken:
+            self._ml_skipped += 1
+            self.log.info(
+                "ML gate skipped %s %s: %s", trade.get("strategy", "?"),
+                trade["type"], prediction.reason,
+            )
+
+        self._ml_last = {
+            "strategy": trade.get("strategy", "?"),
+            "type": trade["type"],
+            "probability": prediction.probability,
+            "threshold": prediction.threshold,
+            "taken": prediction.taken,
+            "time": trade["time"].strftime("%Y-%m-%d %H:%M"),
+        }
+        self._publish_ml()
+        return prediction.taken, prediction
+
+    def _r_multiple(self, trade, exit_price):
+        """Realised result in units of the trade's own initial risk."""
+        entry = float(trade["entry_price"])
+        stop = float(trade["sl"] or 0)
+        if trade["trade_type"] == "BUY":
+            risk = entry - stop
+            move = exit_price - entry
+        else:
+            risk = stop - entry
+            move = entry - exit_price
+        if risk <= 0:
+            return 0.0
+        return move / risk
+
+    def _settle_prediction(self, trade, exit_price, net):
+        """Attach a closed trade's realised R to the prediction that allowed it."""
+        try:
+            multiple = self._r_multiple(trade, exit_price)
+            resolve_prediction(
+                trade["ticket"], multiple, net, "WIN" if net >= 0 else "LOSS"
+            )
+        except Exception:
+            self.log.exception("Could not settle the ML prediction for %s", trade["ticket"])
 
     # ── State persistence ──────────────────────────────────────────
 
@@ -379,7 +639,13 @@ class LiveTrader:
                 else (trade["entry_price"] - price) * 100
             )
             try:
-                log_trade_close(trade["ticket"], price, pips, net, close_time)
+                log_trade_close(
+                    trade["ticket"], price, pips, net, close_time,
+                    r_multiple=self._r_multiple(trade, price),
+                    close_reason="external",
+                )
+                self._settle_prediction(trade, price, net)
+                refresh_strategy_performance(close_time[:10])
                 self.risk_mgr.register_close(net)
                 self._save_state()
                 self.log.info(
@@ -508,10 +774,23 @@ class LiveTrader:
         permitted, why = self._entry_permission(snapshot)
         if not permitted:
             self._block("permission", f"Entry skipped: {why}")
+            self._db_safe(
+                "permission event", log_risk_event,
+                "entry_not_permitted", why, severity="warning",
+                strategy=trade.get("strategy"), blocked=True,
+            )
             return None
 
         spread_ok, spread = self._spread_ok(snapshot.tick)
         if not spread_ok:
+            self._db_safe(
+                "spread event", log_risk_event,
+                "spread_limit",
+                f"spread {spread:.0f} points above the "
+                f"{self.config.execution.max_spread_points:.0f} point limit",
+                severity="info", strategy=trade.get("strategy"),
+                detail={"spread_points": round(spread, 1)}, blocked=True,
+            )
             return None
 
         # Balance and open positions come from MT5 on every entry, so a deposit
@@ -521,6 +800,17 @@ class LiveTrader:
         allowed, reason = self.risk_mgr.can_trade()
         if not allowed:
             self._block(reason, f"Entry skipped: {reason}")
+            self._db_safe(
+                "risk event", log_risk_event,
+                "risk_limit", reason, severity="warning",
+                strategy=trade.get("strategy"), blocked=True,
+                detail={
+                    "daily_pnl": round(self.risk_mgr.daily_pnl, 2),
+                    "daily_trades": self.risk_mgr.daily_trades,
+                    "open_positions": self.risk_mgr.open_positions,
+                    "consecutive_losses": self.risk_mgr.consecutive_losses,
+                },
+            )
             return None
 
         side = trade["type"]
@@ -539,6 +829,12 @@ class LiveTrader:
                 "Skipped %s %s: %s (entry %.2f sl %.2f tp %s)",
                 trade.get("strategy", "?"), side, explanation, entry, stop_loss, take_profit,
             )
+            self._db_safe(
+                "invalid stop event", log_risk_event,
+                "invalid_order", explanation, severity="warning",
+                strategy=trade.get("strategy"), blocked=True,
+                detail={"entry": entry, "sl": stop_loss, "tp": take_profit},
+            )
             return None
 
         if self._duplicate_nearby(snapshot.positions, side, entry):
@@ -550,6 +846,12 @@ class LiveTrader:
         sized_ok, sized_why = self.broker.validate_volume(lots, info=symbol_info)
         if not sized_ok:
             self.log.error("Skipped %s: %s", side, sized_why)
+            self._db_safe(
+                "invalid volume event", log_risk_event,
+                "invalid_volume", sized_why, severity="warning",
+                strategy=trade.get("strategy"), blocked=True,
+                detail={"lots": lots},
+            )
             return None
 
         request = {
@@ -567,11 +869,20 @@ class LiveTrader:
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
+        started = time.monotonic()
         result = self.broker.send_order(request, side)
+        latency_ms = int((time.monotonic() - started) * 1000)
         if not result.ok:
             self.log.error(
                 "Order not filled for %s: retcode=%s %s",
                 key, result.retcode, result.comment,
+            )
+            self._db_safe(
+                "rejected order event", log_system_event,
+                f"order rejected: {result.comment or result.retcode}",
+                level="error", category="order",
+                detail={"signal": key, "retcode": result.retcode,
+                        "attempts": result.attempts, "latency_ms": latency_ms},
             )
             return result
 
@@ -597,12 +908,37 @@ class LiveTrader:
         ) if position is not None else take_profit
 
         try:
-            log_trade_open(
+            trade_row_id = log_trade_open(
                 result.order, self.config.mt5.symbol, side, trade.get("strategy", "?"),
                 fill_price, fill_sl, fill_tp, fill_lots,
                 self._server_now().strftime("%Y-%m-%d %H:%M:%S"),
-                position_id=position_id,
+                position_id=position_id, magic=self.config.mt5.magic,
             )
+            # The execution row is what lets a fill be audited later: what was
+            # requested, what came back, how long the terminal took.
+            if trade_row_id:
+                log_execution(
+                    trade_row_id, position_id=position_id, order_ticket=result.order,
+                    deal_ticket=result.deal, requested_price=entry,
+                    filled_price=fill_price, requested_volume=lots,
+                    filled_volume=fill_lots, spread_points=spread,
+                    retcode=result.retcode, attempts=result.attempts,
+                    latency_ms=latency_ms, comment=result.comment,
+                    executed_at=self._server_now(),
+                )
+            # The gate's decision now has a real fill behind it, so monitoring
+            # can join the prediction to the trade's eventual result.
+            link_prediction_to_trade(key, trade_row_id)
+            signal_symbol = (
+                self.config.breakout.symbol
+                if trade.get("strategy") == "BREAKOUT" else self.config.scalper.symbol
+            )
+            signal = get_signal(signal_symbol, trade.get("strategy", "?"), side, trade["time"])
+            if signal is not None:
+                prediction = get_prediction(key)
+                mark_signal_traded(
+                    signal["id"], trade_row_id, prediction["id"] if prediction else None
+                )
         except Exception:
             # The position is real in MT5 but has no row. Startup recovery will
             # adopt it; log loudly so it is never invisible.
@@ -658,6 +994,7 @@ class LiveTrader:
             inserted = log_signal(
                 symbol, strategy, trade["type"], trade["entry"], trade["sl"], trade["tp"],
                 trade["time"].strftime("%Y-%m-%d %H:%M:%S"),
+                timeframe=self.config.scalper.timeframe,
             )
         except Exception:
             self.log.exception("Could not store signal")
@@ -737,8 +1074,12 @@ class LiveTrader:
             close_time = server_timestamp(group["last_time"]).strftime("%Y-%m-%d %H:%M:%S")
             try:
                 log_trade_close(
-                    trade["ticket"], close_price, profit_pips, group["net"], close_time
+                    trade["ticket"], close_price, profit_pips, group["net"], close_time,
+                    r_multiple=self._r_multiple(trade, close_price),
+                    close_reason="tp/sl",
                 )
+                self._settle_prediction(trade, close_price, group["net"])
+                refresh_strategy_performance(close_time[:10])
             except Exception:
                 self.log.exception("Could not close trade #%s", trade["ticket"])
                 continue
@@ -766,8 +1107,18 @@ class LiveTrader:
 
         if snapshot.connected and self._was_connected is False:
             self.log.info("MT5 connection restored")
+            self._db_safe(
+                "reconnect event", log_system_event, "MT5 connection restored",
+                level="info", category="connection",
+                detail={"reconnects": self.broker.reconnects},
+            )
         elif not snapshot.connected and self._was_connected:
             self.log.warning("MT5 connection lost: %s", snapshot.error or "unknown")
+            self._db_safe(
+                "disconnect event", log_system_event, "MT5 connection lost",
+                level="warning", category="connection",
+                detail={"error": snapshot.error or "unknown"},
+            )
         self._was_connected = snapshot.connected
 
         feed_age = round(snapshot.feed_age, 1)
@@ -928,13 +1279,23 @@ class LiveTrader:
                 server_now = self._server_now()
                 for trade in signals:
                     age = self._signal_age_seconds(trade, server_now)
-                    if 0 <= age <= self.config.execution.max_signal_age_seconds:
-                        self.place_trade(trade)
+                    if not 0 <= age <= self.config.execution.max_signal_age_seconds:
+                        continue
+                    allowed, _ = self._ml_decision(trade, frame)
+                    if not allowed:
+                        continue
+                    # The gate can only remove signals. Execution still goes
+                    # through place_trade -> spread -> risk -> broker.
+                    self.place_trade(trade)
 
                 time.sleep(self.config.execution.loop_seconds)
 
-            except Exception:
+            except Exception as error:
                 self.log.exception("Loop pass failed; continuing")
+                self._db_safe(
+                    "loop error event", log_system_event,
+                    f"loop pass failed: {error}", level="error", category="loop",
+                )
                 self._save_state()
                 time.sleep(30)
 

@@ -416,6 +416,7 @@ class Broker:
             "balance": _rounded(getattr(account, "balance", None)),
             "equity": _rounded(getattr(account, "equity", None)),
             "margin_free": _rounded(getattr(account, "margin_free", None)),
+            "margin": _rounded(getattr(account, "margin", None)),
             "margin_level": _rounded(getattr(account, "margin_level", None), 1),
             "trade_allowed": bool(getattr(account, "trade_allowed", True)),
             "trade_expert": bool(getattr(account, "trade_expert", True)),

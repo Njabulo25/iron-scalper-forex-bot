@@ -514,6 +514,14 @@ def main():
     allowed, reason = strict.can_trade()
     check("the loss-streak stop follows the config", not allowed and "consecutive" in reason)
 
+    # 26. The database records what the engine did, not only the trade result.
+    executions = database.get_executions(limit=20)
+    check("an order execution is recorded with its fill", bool(executions) and executions[0]["order_ticket"] is not None)
+    check("the configuration snapshot is stored", bool(database.get_trading_settings(5)))
+    check("operational events are recorded", bool(database.get_system_events(20)))
+    check("risk refusals are recorded", bool(database.get_risk_events(20)))
+    check("strategy performance is rolled up", database.refresh_strategy_performance() >= 1)
+
     failed = [label for label, ok in checks if not ok]
     print(f"\n{len(checks) - len(failed)}/{len(checks)} checks passed")
     if failed:
