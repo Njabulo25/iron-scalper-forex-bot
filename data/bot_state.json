@@ -1,5 +1,9 @@
 {
-  "date": "2026-08-15",
+  "date": "2026-11-26",
   "executed_signals": [],
-  "balance": 100828.66
+  "balance": 3000.02,
+  "day_start_balance": 3000.02,
+  "daily_pnl": 0.0,
+  "daily_trades": 0,
+  "consecutive_losses": 0
 }
