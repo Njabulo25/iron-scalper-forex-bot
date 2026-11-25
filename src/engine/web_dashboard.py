@@ -6,6 +6,7 @@ import time
 import os
 from datetime import datetime
 
+from config.settings import CONFIG
 from src.engine.auth import check_auth, login_required
 from src.engine.analytics import get_daily_summary, get_weekly_comparison, get_strategy_breakdown, get_session_analysis, get_equity_curve, get_trade_log
 from src.engine.graph_analyzer import UPLOAD_FOLDER, analyze_chart, save_upload
@@ -15,16 +16,52 @@ app.config["SECRET_KEY"] = "iron-scalper-dashboard-session-key"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# The trading loop and the Flask handlers both touch ``state``, so every read
+# and write takes this lock. ``_control_lock`` serialises start/stop, which
+# stops a double click from launching two loops against one account.
+state_lock = threading.Lock()
+_control_lock = threading.Lock()
+
 state = {
     "running": False, "balance": 10000, "starting_balance": 10000,
     "daily_pnl": 0, "open_positions": [], "trade_history": [],
     "daily_trades": 0, "total_trades": 0, "wins": 0, "losses": 0,
     "win_rate": 0, "status": "Stopped", "bid": 0, "ask": 0,
-    "upcoming": [], "page": "dashboard"
+    "upcoming": [], "page": "dashboard",
+    # Republished by the loop on every pass so the header shows real health.
+    "mt5_connected": False, "mt5_reconnects": 0, "mt5_error": "",
+    "feed_age_seconds": 0, "feed_stale": False,
+    "mt5_ready": False, "mt5_issues": [],
+    "mt5_terminal": {}, "mt5_account": {}, "mt5_symbol": {},
+    "pending_orders": [], "manual_positions": 0,
+    # Published by the engine at startup: the configuration it trades with.
+    "config": {},
 }
 
-trader_thread = None
 trader_instance = None
+
+
+def _snapshot_state():
+    """A consistent copy of the shared state for JSON replies and sockets."""
+    with state_lock:
+        return dict(state)
+
+
+def _config_payload():
+    """The configuration the engine is actually using, or the file's values.
+
+    When the bot is running this is the snapshot the engine published at
+    startup, i.e. exactly the object its strategies and risk manager read - not
+    a second copy parsed out of the file. When it is stopped there is no engine
+    to report, so the configured values are shown and labelled as such.
+    """
+    with state_lock:
+        published = state.get("config") or {}
+        running = bool(state.get("running"))
+
+    if published:
+        return {"source": "engine", "running": running, "config": published}
+    return {"source": "settings.py", "running": False, "config": CONFIG.snapshot()}
 
 LOGIN_HTML = r'''
 <!DOCTYPE html>
@@ -159,10 +196,25 @@ HTML = r'''
         }
         .badge-running { background: #003d1a; color: var(--green); border: 1px solid var(--green); }
         .badge-stopped { background: #3d0000; color: var(--red); border: 1px solid var(--red); }
+        .chip {
+            display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px;
+            border: 1px solid var(--border); border-radius: 20px;
+            font-size: 12px; color: var(--muted);
+        }
+        .chip::before {
+            content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+        }
+        .chip-live { color: var(--green); border-color: var(--green); }
+        .chip-live::before { background: var(--green); }
+        .chip-lost { color: var(--red); border-color: var(--red); }
+        .chip-lost::before { background: var(--red); }
         
         .cards {
             display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 12px; margin-bottom: 20px;
+        }
+        @media (min-width: 1025px) {
+            .cards { grid-template-columns: repeat(4, 1fr); }
         }
         .card {
             background: var(--card); border: 1px solid var(--border); border-radius: 10px;
@@ -278,7 +330,10 @@ HTML = r'''
             <button class="menu-toggle" onclick="toggleSidebar()">&#9776;</button>
             <h1>IRON <span>SCALPER</span></h1>
         </div>
-        <span id="badge" class="badge badge-stopped">Stopped</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span id="conn" class="chip">MT5 idle</span>
+            <span id="badge" class="badge badge-stopped">Stopped</span>
+        </div>
     </div>
     
     <div class="btns">
@@ -308,6 +363,15 @@ HTML = r'''
         <div class="section risk">
             <div class="risk-head"><span>Daily risk used</span><strong id="risktxt">--</strong></div>
             <div class="risk-track"><div class="risk-fill" id="riskfill"></div></div>
+        </div>
+
+        <div class="section">
+            <h3>MetaTrader 5 Session</h3>
+            <table>
+                <thead><tr><th>Field</th><th>Value</th><th>Field</th><th>Value</th></tr></thead>
+                <tbody id="mt5-panel"><tr><td colspan="4" style="text-align:center;color:var(--muted);">Engine stopped - start the bot to read the terminal</td></tr></tbody>
+            </table>
+            <div id="mt5-issues" style="padding:10px 16px;font-size:11px;color:var(--red);"></div>
         </div>
         
         <div class="section">
@@ -354,15 +418,11 @@ HTML = r'''
     <!-- SETTINGS PAGE -->
     <div class="page" id="page-settings">
         <div class="section">
-            <h3>Bot Settings</h3>
+            <h3>Configuration In Use</h3>
+            <div id="conf-source" style="padding:10px 16px;font-size:11px;color:var(--muted);">Loading configuration…</div>
             <table>
-                <tr><td>Risk Per Trade</td><td>1%</td></tr>
-                <tr><td>Max Daily Loss</td><td>3%</td></tr>
-                <tr><td>Max Daily Trades</td><td>10</td></tr>
-                <tr><td>Breakout Strategy</td><td>Enabled</td></tr>
-                <tr><td>Scalper Strategy</td><td>Enabled</td></tr>
-                <tr><td>Trading Hours</td><td>08:00 - 16:00 GMT</td></tr>
-                <tr><td>Symbol</td><td>XAUUSD</td></tr>
+                <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+                <tbody id="conf-rows"><tr><td colspan="2" style="text-align:center;color:var(--muted);">Loading…</td></tr></tbody>
             </table>
         </div>
     </div>
@@ -454,11 +514,190 @@ graphUploadForm.addEventListener('submit', async function(event) {
     }
 });
 
+function pairsTable(rows, emptyText) {
+    if (!rows.length) {
+        return '<tr><td colspan="4" style="text-align:center;color:var(--muted);">' + emptyText + '</td></tr>';
+    }
+    var html = '';
+    for (var i = 0; i < rows.length; i += 2) {
+        var left = rows[i];
+        var right = rows[i + 1] || ['', ''];
+        html += '<tr><td style="color:var(--muted);white-space:nowrap;">' + left[0] +
+                '</td><td>' + left[1] +
+                '</td><td style="color:var(--muted);white-space:nowrap;">' + right[0] +
+                '</td><td>' + right[1] + '</td></tr>';
+    }
+    return html;
+}
+
+function money(value) {
+    if (value === undefined || value === null || value === '') return '';
+    return '$' + Number(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function renderMt5(d) {
+    var panel = document.getElementById('mt5-panel');
+    if (!panel) return;
+
+    var t = d.mt5_terminal || {}, a = d.mt5_account || {}, sym = d.mt5_symbol || {};
+    var rows = [];
+    function add(label, value) {
+        if (value === undefined || value === null || value === '') return;
+        rows.push([label, String(value)]);
+    }
+
+    add('Terminal', t.name);
+    add('Company', t.company);
+    add('Build', t.build);
+    add('Terminal path', t.path);
+    add('Login', a.login);
+    add('Server', a.server);
+    add('Currency', a.currency);
+    add('Leverage', a.leverage ? '1:' + a.leverage : '');
+    add('Balance', money(a.balance));
+    add('Equity', money(a.equity));
+    add('Free margin', money(a.margin_free));
+    add('Trade allowed', a.trade_allowed === undefined ? '' : (a.trade_allowed ? 'Yes' : 'No'));
+    add('Algo trading', t.trade_allowed === undefined ? '' : (t.trade_allowed ? 'Enabled' : 'Disabled'));
+    add('Symbol', sym.name);
+    add('Trade mode', sym.trade_mode_text);
+    add('Digits', sym.digits);
+    add('Contract size', sym.contract_size);
+    add('Volume min', sym.volume_min);
+    add('Volume step', sym.volume_step);
+    add('Volume max', sym.volume_max);
+    add('Stops level', sym.stops_level === undefined || sym.stops_level === null ? '' : sym.stops_level + ' pts');
+    add('Spread', d.ask && d.bid ? ((((d.ask - d.bid) * 100) || 0).toFixed(0) + ' pts') : '');
+    // Live freshness only means something while a loop is publishing it.
+    if (d.running) {
+        add('Tick age', (d.feed_age_seconds || 0) + 's' + (d.feed_stale ? ' (stale)' : ''));
+        add('Reconnects', d.mt5_reconnects || 0);
+        add('Pending orders', (d.pending_orders || []).length);
+        add('Manual positions', d.manual_positions || 0);
+        add('Last error', d.mt5_error);
+    }
+
+    panel.innerHTML = pairsTable(rows, d.running
+        ? 'Waiting for the trading engine'
+        : 'Engine stopped - start the bot to read the terminal');
+
+    var issues = document.getElementById('mt5-issues');
+    if (issues) {
+        var list = d.mt5_issues || [];
+        issues.textContent = list.length ? 'Not ready to trade: ' + list.join('; ') : '';
+    }
+}
+
+var CONFIG_GROUPS = [
+    ['Risk', 'risk', [
+        ['risk_per_trade', 'Risk per trade'], ['max_daily_loss_pct', 'Max daily loss'],
+        ['max_daily_trades', 'Max daily trades'], ['max_open_positions', 'Max open positions'],
+        ['max_consecutive_losses', 'Loss-streak stop'], ['same_direction_guard_usd', 'Duplicate guard (USD)'],
+        ['starting_balance', 'Fallback balance']]],
+    ['Execution', 'execution', [
+        ['loop_seconds', 'Loop interval (s)'], ['max_signal_age_seconds', 'Max signal age (s)'],
+        ['history_scan_seconds', 'Deal-history scan (s)'], ['position_sync_seconds', 'Position sync (s)'],
+        ['max_spread_points', 'Max spread (points)']]],
+    ['MetaTrader 5', 'mt5', [
+        ['symbol', 'Symbol'], ['magic', 'Magic number'], ['deviation_points', 'Deviation (points)'],
+        ['retry_attempts', 'Order attempts'], ['reconnect_seconds', 'Reconnect backoff (s)'],
+        ['max_backoff_seconds', 'Max backoff (s)'], ['feed_stale_seconds', 'Feed stale after (s)'],
+        ['terminal_path', 'Pinned terminal'], ['expected_login', 'Expected login'],
+        ['expected_server', 'Expected server'], ['require_algo_trading', 'Require algo trading']]],
+    ['Breakout', 'breakout', [
+        ['enabled', 'Enabled'], ['symbol', 'Symbol'], ['asian_session', 'Asian range'],
+        ['session', 'Entry session'], ['min_asian_bars', 'Min Asian bars'],
+        ['atr_period', 'ATR period'], ['atr_multiplier', 'ATR multiplier'],
+        ['min_range', 'Min Asian range'], ['sl_range_pct', 'Stop (% of range)'], ['tp_rr', 'Target (R multiple)']]],
+    ['Scalper', 'scalper', [
+        ['enabled', 'Enabled'], ['symbol', 'Symbol'], ['timeframe', 'Timeframe'],
+        ['session', 'Session'], ['atr_period', 'ATR period'], ['rsi_period', 'RSI period'],
+        ['ema_fast', 'Fast EMA'], ['ema_slow', 'Slow EMA'], ['pullback_atr', 'Pullback (ATR)'],
+        ['sl_atr', 'Stop (ATR)'], ['tp_atr', 'Target (ATR)'],
+        ['rsi_long_min', 'RSI long min'], ['rsi_long_max', 'RSI long max'],
+        ['rsi_short_min', 'RSI short min'], ['rsi_short_max', 'RSI short max'],
+        ['min_bar_spacing', 'Bars between entries']]],
+    ['Machine learning', 'ml', [
+        ['enabled', 'Gate enabled'], ['confidence_min', 'Min confidence'], ['model_path', 'Model path']]]
+];
+
+function configValue(key, value) {
+    if (typeof value === 'boolean') return value ? 'Enabled' : 'Disabled';
+    if (key === 'risk_per_trade' || key === 'max_daily_loss_pct' || key === 'sl_range_pct' || key === 'confidence_min') {
+        return (Number(value) * 100).toFixed(1) + '%';
+    }
+    return String(value);
+}
+
+function renderConfig(cfg) {
+    var body = document.getElementById('conf-rows');
+    if (!body) return;
+
+    var html = '';
+    CONFIG_GROUPS.forEach(function(group) {
+        var values = cfg[group[1]] || {};
+        html += '<tr><td colspan="2" style="color:var(--gold);font-size:10px;letter-spacing:1px;' +
+                'text-transform:uppercase;padding-top:14px;">' + group[0] + '</td></tr>';
+        group[2].forEach(function(field) {
+            var value = values[field[0]];
+            if (value === undefined || value === null || value === '') return;
+            html += '<tr><td style="color:var(--muted);">' + field[1] + '</td><td>' +
+                    configValue(field[0], value) + '</td></tr>';
+        });
+    });
+
+    body.innerHTML = html || '<tr><td colspan="2" style="text-align:center;color:var(--muted);">No configuration published.</td></tr>';
+}
+
+var configLoadedFor = null;
+
+function loadConfig(running) {
+    if (configLoadedFor === running) return;
+    configLoadedFor = running;
+
+    fetch('/api/config').then(function(response) { return response.json(); }).then(function(payload) {
+        var note = document.getElementById('conf-source');
+        if (note) {
+            note.textContent = payload.source === 'engine'
+                ? (payload.running
+                    ? 'These are the exact values the running trading engine is using.'
+                    : 'Values the last engine run was built with.')
+                : 'Configured in config/settings.py. The engine is stopped, so nothing is trading these yet.';
+        }
+        renderConfig(payload.config || {});
+    }).catch(function() {
+        var note = document.getElementById('conf-source');
+        if (note) note.textContent = 'Could not load the configuration.';
+    });
+}
+
+function renderConn(d) {
+    var el = document.getElementById('conn');
+    if (!el) return;
+    if (!d.running) {
+        el.className = 'chip';
+        el.textContent = 'MT5 idle';
+        return;
+    }
+    var live = !!d.mt5_connected;
+    var age = Math.round(d.feed_age_seconds || 0);
+    el.className = 'chip ' + (live ? 'chip-live' : 'chip-lost');
+    if (live) {
+        el.textContent = age >= 5 ? 'MT5 live \u00b7 feed ' + age + 's' : 'MT5 live';
+    } else {
+        el.textContent = 'MT5 lost \u00b7 retry ' + (d.mt5_reconnects || 0);
+        el.title = d.mt5_error || 'Reconnecting to MetaTrader 5';
+    }
+}
+
 s.on('state_update', d => {
     document.getElementById('badge').textContent = d.status || 'Stopped';
     document.getElementById('badge').className = 'badge ' + (d.running ? 'badge-running' : 'badge-stopped');
     document.getElementById('go').disabled = d.running;
     document.getElementById('st').disabled = !d.running;
+    renderConn(d);
+    renderMt5(d);
+    loadConfig(d.running);
     
     document.getElementById('bal').textContent = '$' + (d.balance || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
     
@@ -544,6 +783,9 @@ setInterval(function() {
         document.getElementById('badge').className = 'badge ' + (d.running ? 'badge-running' : 'badge-stopped');
         document.getElementById('go').disabled = d.running;
         document.getElementById('st').disabled = !d.running;
+        renderConn(d);
+        renderMt5(d);
+        loadConfig(d.running);
     });
 }, 10000);
 </script>
@@ -586,35 +828,63 @@ def index():
 @app.route('/start', methods=['POST'])
 @login_required
 def start():
-    global trader_thread, trader_instance, state
-    if state["running"]:
-        return jsonify({"status": "already_running"})
-    state["running"] = True
-    state["status"] = "Running"
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-    from src.engine.live_trader import LiveTrader
-    trader_instance = LiveTrader(web_state=state, socketio=socketio)
-    trader_thread = threading.Thread(target=trader_instance.run_web, daemon=True)
-    trader_thread.start()
+    global trader_instance
+
+    with _control_lock:
+        if trader_instance is not None and state.get("running"):
+            return jsonify({"status": "already_running"})
+
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from src.engine.live_trader import LiveTrader
+
+        try:
+            trader = LiveTrader(web_state=state, socketio=socketio, state_lock=state_lock)
+        except Exception as error:
+            # Connecting can fail (terminal closed, wrong account). Report it and
+            # stay Stopped instead of leaving the panel stuck on "Running".
+            with state_lock:
+                state["running"] = False
+                state["status"] = "Stopped"
+                state["mt5_connected"] = False
+                state["mt5_error"] = str(error)
+            socketio.emit('state_update', _snapshot_state())
+            return jsonify({"status": "error", "error": str(error)}), 503
+
+        trader_instance = trader
+        with state_lock:
+            state["running"] = True
+            state["status"] = "Running"
+            state["mt5_connected"] = True
+            state["mt5_error"] = ""
+
+        threading.Thread(target=trader.run_web, daemon=True, name="iron-trader").start()
+
+    socketio.emit('state_update', _snapshot_state())
     return jsonify({"status": "started"})
 
 @app.route('/stop', methods=['POST'])
 @login_required
 def stop():
-    global state, trader_instance
-    state["running"] = False
-    state["status"] = "Stopped"
-    if trader_instance:
-        trader_instance._stop = True
-    socketio.emit('state_update', state)
+    global trader_instance
+
+    with _control_lock:
+        trader = trader_instance
+        trader_instance = None
+        if trader is not None:
+            trader.stop()
+        with state_lock:
+            state["running"] = False
+            state["status"] = "Stopped"
+
+    socketio.emit('state_update', _snapshot_state())
     return jsonify({"status": "stopped"})
 
 @app.route('/state')
 @login_required
 def get():
-    return jsonify(state)
+    return jsonify(_snapshot_state())
 
 
 @app.route('/api/analytics/daily')
@@ -654,8 +924,8 @@ def api_trades():
 @app.route('/api/config')
 @login_required
 def api_config():
-    """Return the current dashboard configuration/state for authenticated users."""
-    return jsonify(state)
+    """Return the configuration the trading engine is actually using."""
+    return jsonify(_config_payload())
 
 
 @app.route('/upload_graph', methods=['POST'])

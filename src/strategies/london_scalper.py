@@ -1,52 +1,77 @@
-import pandas as pd
 import numpy as np
-from datetime import time
+import pandas as pd
+
+from config.settings import CONFIG
+
 
 class LondonScalper:
-    def __init__(self, df_5m):
+    """London-session EMA pullback scalper on 5-minute bars.
+
+    Every indicator period, band and ATR multiple comes from
+    :class:`config.settings.ScalperConfig` rather than a literal in this file.
+    """
+
+    def __init__(self, df_5m, config=None):
+        self.config = config or CONFIG.scalper
         self.df = df_5m.copy()
         self._calc()
 
     def _calc(self):
+        config = self.config
         high, low, close = self.df["high"], self.df["low"], self.df["close"]
-        tr = np.maximum(high-low, np.maximum(abs(high-close.shift()), abs(low-close.shift())))
-        self.df["atr"] = tr.rolling(14).mean()
+
+        tr = np.maximum(high - low, np.maximum(abs(high - close.shift()), abs(low - close.shift())))
+        self.df["atr"] = tr.rolling(config.atr_period).mean()
+
         delta = close.diff()
-        gain = delta.clip(lower=0).rolling(7).mean()
-        loss = -delta.clip(upper=0).rolling(7).mean()
-        self.df["rsi"] = 100 - (100/(1+gain/loss))
-        self.df["ema20"] = close.ewm(span=20, adjust=False).mean()
-        self.df["ema50"] = close.ewm(span=50, adjust=False).mean()
+        gain = delta.clip(lower=0).rolling(config.rsi_period).mean()
+        loss = -delta.clip(upper=0).rolling(config.rsi_period).mean()
+        self.df["rsi"] = 100 - (100 / (1 + gain / loss))
+
+        self.df["ema_fast"] = close.ewm(span=config.ema_fast, adjust=False).mean()
+        self.df["ema_slow"] = close.ewm(span=config.ema_slow, adjust=False).mean()
 
     def generate(self):
+        config = self.config
         trades = []
-        last_idx = -10
-        for i in range(60, len(self.df)):
+        last_index = -10
+        start = max(config.ema_slow, config.atr_period) + 10
+
+        for i in range(start, len(self.df)):
             row = self.df.iloc[i]
-            t = row["time"].time()
-            if not (time(8,0) <= t <= time(16,0)):
+            if not config.session_start <= row["time"].time() <= config.session_end:
                 continue
-            if i - last_idx < 5:
+            if i - last_index < config.min_bar_spacing:
                 continue
+
             atr = row["atr"]
-            c = row["close"]
-            ema = row["ema20"]
+            close = row["close"]
+            ema = row["ema_fast"]
             rsi = row["rsi"]
             if pd.isna(atr) or atr == 0 or pd.isna(ema) or pd.isna(rsi):
                 continue
-            if abs(c - ema) > 0.8 * atr:
+            if abs(close - ema) > config.pullback_atr * atr:
                 continue
-            body = c - row["open"]
-            bull = row["ema20"] > row["ema50"]
-            bear = row["ema20"] < row["ema50"]
-            if bull and body > 0 and rsi > 40 and rsi < 70:
-                sl = c - 1.5 * atr
-                tp = c + 2.5 * atr
-                trades.append({"type":"BUY","entry":c,"sl":sl,"tp":tp,"time":row["time"],"strategy":"SCALPER"})
-                last_idx = i
-            elif bear and body < 0 and rsi < 60 and rsi > 30:
-                sl = c + 1.5 * atr
-                tp = c - 2.5 * atr
-                trades.append({"type":"SELL","entry":c,"sl":sl,"tp":tp,"time":row["time"],"strategy":"SCALPER"})
-                last_idx = i
+
+            body = close - row["open"]
+            bullish = row["ema_fast"] > row["ema_slow"]
+            bearish = row["ema_fast"] < row["ema_slow"]
+
+            if bullish and body > 0 and config.rsi_long_min < rsi < config.rsi_long_max:
+                trades.append({
+                    "type": "BUY", "entry": close,
+                    "sl": close - config.sl_atr * atr,
+                    "tp": close + config.tp_atr * atr,
+                    "time": row["time"], "strategy": "SCALPER",
+                })
+                last_index = i
+            elif bearish and body < 0 and config.rsi_short_min < rsi < config.rsi_short_max:
+                trades.append({
+                    "type": "SELL", "entry": close,
+                    "sl": close + config.sl_atr * atr,
+                    "tp": close - config.tp_atr * atr,
+                    "time": row["time"], "strategy": "SCALPER",
+                })
+                last_index = i
+
         return trades

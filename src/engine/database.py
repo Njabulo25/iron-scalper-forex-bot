@@ -145,6 +145,20 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_trades_position_id ON trades (position_id)"
         )
 
+        # A signal is identified by its strategy, side and bar. A unique index
+        # lets SQLite dedupe signals across restarts, which replaced the
+        # in-memory set that forgot everything on restart.
+        try:
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_identity
+                    ON signals (strategy, signal_type, signal_time)
+                """
+            )
+        except sqlite3.DatabaseError:
+            # Pre-existing duplicate rows: dedupe still happens at read time.
+            pass
+
     _INITIALIZED.add(str(DATABASE_PATH))
 
 
@@ -154,13 +168,14 @@ def log_signal(symbol, strategy, signal_type, entry, sl, tp, signal_time):
     with _DatabaseConnection() as connection:
         cursor = connection.execute(
             """
-            INSERT INTO signals (
+            INSERT OR IGNORE INTO signals (
                 symbol, strategy, signal_type, entry_price, sl, tp, signal_time, executed
             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
             """,
             (symbol, strategy, signal_type, entry, sl, tp, _timestamp(signal_time)),
         )
-        return cursor.lastrowid
+        # True only when this signal was new.
+        return cursor.rowcount > 0
 
 
 def log_trade_open(ticket, symbol, trade_type, strategy, entry, sl, tp, lots, open_time, position_id=None):
@@ -239,6 +254,16 @@ def get_recent_signals(limit=100):
             LIMIT ?
             """,
             (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_open_trades():
+    """Return every trade still marked OPEN, oldest first."""
+    _ensure_ready()
+    with _DatabaseConnection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM trades WHERE status = 'OPEN' ORDER BY id"
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -371,33 +396,6 @@ def get_day_state(day=None):
         "realised_usd": round(realised_usd, 2),
         "trades": len(rows),
         "trailing_losses": trailing_losses,
-    }
-
-
-def get_win_rate():
-    """Return aggregate closed-trade performance based on realised pips."""
-    _ensure_ready()
-    with _DatabaseConnection() as connection:
-        row = connection.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN profit_pips > 0 THEN 1 ELSE 0 END), 0) AS wins,
-                COALESCE(SUM(CASE WHEN profit_pips <= 0 THEN 1 ELSE 0 END), 0) AS losses,
-                COALESCE(SUM(profit_pips), 0) AS total_pips
-            FROM trades
-            WHERE status = 'CLOSED'
-            """
-        ).fetchone()
-
-    wins = row["wins"]
-    losses = row["losses"]
-    total_trades = wins + losses
-    win_rate = (wins / total_trades * 100) if total_trades else 0.0
-    return {
-        "wins": wins,
-        "losses": losses,
-        "win_rate": win_rate,
-        "total_pips": row["total_pips"],
     }
 
 
