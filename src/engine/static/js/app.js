@@ -22,7 +22,7 @@
         connection: ['MT5 connection', 'Terminal identity, quote freshness and readiness'],
         logs: ['Logs and health', 'Database state and recorded engine events'],
         graph: ['Chart analysis', 'Image upload utility'],
-        share: ['Run this terminal', 'Start the dashboard and connect MetaTrader 5']
+        share: ['Quick start', 'Launch the dashboard and connect MetaTrader 5']
     };
 
     function $(selector, root) { return (root || document).querySelector(selector); }
@@ -319,7 +319,7 @@
         if (target === 'overview') {
             setText('overview-equity-note', equity.length ? 'Cumulative realised P/L · ' + equity.length + ' close day(s)' : 'No closed trades in this range');
             chartLine('overview-equity', equity.map(function (row) { return row.day; }), [
-                { name: 'Cumulative realised P/L', values: equity.map(function (row) { return Number(row.cumulative || 0); }), color: '#d8a33a' }
+                { name: 'Cumulative realised P/L', values: equity.map(function (row) { return Number(row.cumulative || 0); }), color: '#57d5ca' }
             ], { format: function (value) { return money(value, currency); }, emptyText: 'No closed trades in this range' });
             chartBars('overview-daily', daily.map(function (row) { return row.day; }), [
                 { name: 'Daily net', values: daily.map(function (row) { return Number(row.daily_profit || 0); }) }
@@ -344,7 +344,7 @@
         setText('perf-avg-note', 'Average net per closed trade');
         setText('perf-equity-note', equity.length ? 'Cumulative realised P/L · ' + equity.length + ' close day(s)' : 'No closed trades in this range');
         chartLine('perf-equity', equity.map(function (row) { return row.day; }), [
-            { name: 'Cumulative realised P/L', values: equity.map(function (row) { return Number(row.cumulative || 0); }), color: '#d8a33a' }
+            { name: 'Cumulative realised P/L', values: equity.map(function (row) { return Number(row.cumulative || 0); }), color: '#57d5ca' }
         ], { format: function (value) { return money(value, currency); }, emptyText: 'No closed trades in this range' });
         chartBars('perf-daily', daily.map(function (row) { return row.day; }), [
             { name: 'Daily net', values: daily.map(function (row) { return Number(row.daily_profit || 0); }) }
@@ -592,10 +592,10 @@
             : 'No model registry entry is available. Train a model to record accuracy, confidence and comparison results.';
         var bands = oos.confidence_bands || [];
         chartBars('ml-bands', bands.map(function (row) { return row.band; }), [
-            { name: 'Win rate', values: bands.map(function (row) { return Number(row.win_rate || 0) * 100; }), color: '#d8a33a' }
+            { name: 'Win rate', values: bands.map(function (row) { return Number(row.win_rate || 0) * 100; }), color: '#57d5ca' }
         ], { format: function (v) { return number(v, 0) + '%'; }, emptyText: 'No out-of-sample confidence bands recorded' });
         chartBars('ml-comparison', ['Rule-based', 'ML gated'], [
-            { name: 'Average R / trade', values: [baseline.avg_r, gated.avg_r], color: '#4d9de0' }
+            { name: 'Average R / trade', values: [baseline.avg_r, gated.avg_r], color: '#7ab6ff' }
         ], { format: function (v) { return number(v, 3) + 'R'; }, emptyText: 'No model comparison recorded' });
         detailList('ml-classifier', [
             ['Samples', number(classification.samples, 0)], ['Precision', pct(classification.precision, true)],
@@ -650,8 +650,8 @@
         var latest = runs[0] && runs[0].metrics || {};
         var folds = latest.folds || [];
         chartLine('training-folds', folds.filter(function (row) { return row.gated; }).map(function (row) { return 'Fold ' + row.fold; }), [
-            { name: 'Rule-based total R', values: folds.filter(function (row) { return row.gated; }).map(function (row) { return Number((row.baseline || {}).total_r || 0); }), color: '#4d9de0', fill: false },
-            { name: 'ML gated total R', values: folds.filter(function (row) { return row.gated; }).map(function (row) { return Number((row.gated || {}).total_r || 0); }), color: '#d8a33a', fill: false }
+            { name: 'Rule-based total R', values: folds.filter(function (row) { return row.gated; }).map(function (row) { return Number((row.baseline || {}).total_r || 0); }), color: '#7ab6ff', fill: false },
+            { name: 'ML gated total R', values: folds.filter(function (row) { return row.gated; }).map(function (row) { return Number((row.gated || {}).total_r || 0); }), color: '#57d5ca', fill: false }
         ], { format: function (v) { return number(v, 1) + 'R'; }, includeZero: true, emptyText: 'Per-fold data is not recorded in the database' });
         var monitor = payload.monitor || {};
         detailList('training-live', [

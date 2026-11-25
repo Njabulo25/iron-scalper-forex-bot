@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Iron Scalper · Trading Terminal</title>
-<link rel="preconnect" href="https://cdn.socket.io">
+<title>Iron Scalper | Quant Terminal</title>
+<meta name="theme-color" content="#0a1420">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
@@ -14,59 +15,59 @@
 
 <aside class="sidebar" id="sidebar">
     <div class="brand">
-        <div class="brand-mark">IS</div>
+        <img class="brand-mark" src="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}" alt="">
         <div class="brand-text">
-            <strong>IRON SCALPER</strong>
-            <span>XAUUSD · Terminal</span>
+            <strong>IRON <span>SCALPER</span></strong>
+            <span>QUANT TRADING TERMINAL</span>
         </div>
     </div>
 
     <nav class="nav" id="nav">
         <p class="nav-group">Overview</p>
         <a href="#overview" class="nav-link is-active" data-page="overview">
-            <span class="dot"></span>Dashboard
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg></span><span>Dashboard</span>
         </a>
         <a href="#performance" class="nav-link" data-page="performance">
-            <span class="dot"></span>Performance
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19.5h16M5.5 16l4.1-4.2 3.1 2.3 5.8-7"/><path d="M14.7 7.1h3.8v3.8"/></svg></span><span>Performance</span>
         </a>
 
         <p class="nav-group">Trading</p>
         <a href="#positions" class="nav-link" data-page="positions">
-            <span class="dot"></span>Open positions<span class="pill" id="nav-positions">0</span>
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7.5h16M4 16.5h16"/><circle cx="9" cy="7.5" r="2.5"/><circle cx="15" cy="16.5" r="2.5"/></svg></span><span>Open positions</span><span class="pill" id="nav-positions">0</span>
         </a>
         <a href="#history" class="nav-link" data-page="history">
-            <span class="dot"></span>Trade history
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></span><span>Trade history</span>
         </a>
         <a href="#strategies" class="nav-link" data-page="strategies">
-            <span class="dot"></span>Strategies
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="11" cy="18" r="2"/></svg></span><span>Strategies</span>
         </a>
         <a href="#risk" class="nav-link" data-page="risk">
-            <span class="dot"></span>Risk &amp; ATR
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.5 19 6v5.4c0 4.1-2.7 7.3-7 9.1-4.3-1.8-7-5-7-9.1V6l7-2.5Z"/><path d="m9 12 2 2 4-4"/></svg></span><span>Risk &amp; ATR</span>
         </a>
 
         <p class="nav-group">Intelligence</p>
         <a href="#ml" class="nav-link" data-page="ml">
-            <span class="dot"></span>Machine learning
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="17" r="2.5"/><path d="m7.7 8.1 2.8 6.7m5.7-7.3-3.1 7.2M8 7h8"/></svg></span><span>Machine learning</span>
         </a>
         <a href="#training" class="nav-link" data-page="training">
-            <span class="dot"></span>Training &amp; models
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5h7.5a2 2 0 0 1 2 2v12H6a2 2 0 0 0-2 1.5V5.5Zm16 0h-5a1.5 1.5 0 0 0-1.5 1.5v12H18a2 2 0 0 1 2 1.5V5.5Z"/></svg></span><span>Training &amp; models</span>
         </a>
         <a href="#backtesting" class="nav-link" data-page="backtesting">
-            <span class="dot"></span>Backtesting
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8V4m0 4h4M5.4 8a8 8 0 1 1-1 7.7"/><path d="M12 7v5l3 2"/></svg></span><span>Backtesting</span>
         </a>
 
         <p class="nav-group">System</p>
         <a href="#connection" class="nav-link" data-page="connection">
-            <span class="dot"></span>MT5 connection
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 8.5 6.5 7a3.5 3.5 0 0 0-5 5l3 3a3.5 3.5 0 0 0 5 0l2-2M16 15.5l1.5 1.5a3.5 3.5 0 0 0 5-5l-3-3a3.5 3.5 0 0 0-5 0l-2 2M8.5 15.5l7-7"/></svg></span><span>MT5 connection</span>
         </a>
         <a href="#logs" class="nav-link" data-page="logs">
-            <span class="dot"></span>Logs &amp; health
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 12h4l2-5 4 10 2.2-5h4.8"/><path d="M4 4.5h16v15H4z"/></svg></span><span>Logs &amp; health</span>
         </a>
         <a href="#graph" class="nav-link" data-page="graph">
-            <span class="dot"></span>Chart analysis
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19.5h16M6 17V11m5 6V6m5 11v-4m4 4V8"/></svg></span><span>Chart analysis</span>
         </a>
         <a href="#share" class="nav-link" data-page="share">
-            <span class="dot"></span>Deploy notes
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 4.5h10M7 9h10M7 13.5h6M5 3.5h14v17H5z"/></svg></span><span>Quick start</span>
         </a>
     </nav>
 
@@ -75,13 +76,13 @@
             <span class="user-avatar">{{ username[0]|upper }}</span>
             <div>
                 <strong>{{ username }}</strong>
-                <span>Operator</span>
+                <span>Terminal operator</span>
             </div>
             <a class="logout" href="/logout" onclick="return confirm('Sign out of the terminal?')">Sign out</a>
         </div>
         <p class="risk-note">
-            <strong>Risk notice.</strong> Leveraged gold trading can lose more than
-            the balance shown. Results here are recorded trades, not a forecast.
+            <strong>Risk notice.</strong> Leveraged trading carries material risk.
+            Performance panels show recorded results, not forecasts.
         </p>
     </div>
 </aside>
@@ -669,19 +670,18 @@
             </article>
         </section>
 
-        <!-- ── SHARE ────────────────────────────────────────────── -->
+        <!-- ── QUICK START ──────────────────────────────────────── -->
         <section class="page" id="page-share">
             <article class="panel">
-                <header class="panel-head"><div><h2>Running this terminal elsewhere</h2><p>Same engine, same database, same page</p></div></header>
+                <header class="panel-head"><div><h2>Start Iron Scalper</h2><p>One launcher for the dashboard and trading engine</p></div></header>
                 <ol class="steps">
-                    <li><span>1</span>Copy the <code>Iron Scalper</code> folder to the target machine.</li>
-                    <li><span>2</span>Install Python 3.10+ and a signed-in MetaTrader 5 terminal.</li>
-                    <li><span>3</span><code>pip install -r requirements.txt</code></li>
-                    <li><span>4</span><code>python src/engine/web_dashboard.py</code></li>
-                    <li><span>5</span>Open <code>http://localhost:5000</code> and sign in.</li>
-                    <li><span>6</span>Log into the MT5 demo account, then start the engine here.</li>
+                    <li><span>1</span>Install Python 3.12 and MetaTrader 5 for Windows, then sign in to MT5.</li>
+                    <li><span>2</span>Double-click <code>run.bat</code>. The first run creates the Python environment and installs dependencies.</li>
+                    <li><span>3</span>Open <code>http://127.0.0.1:5000</code> and sign in to the terminal.</li>
+                    <li><span>4</span>Check the account, symbol and risk settings, then choose <strong>Start engine</strong>.</li>
+                    <li><span>5</span>If startup fails, open <strong>MT5 connection</strong> or <strong>Logs &amp; health</strong> for the reported issue.</li>
                 </ol>
-                <p class="panel-note">The database lives in <code>data/iron_scalper.db</code>. Copy it with the folder to keep the trade record.</p>
+                <p class="panel-note">The dashboard stays stopped until you start the engine. Trade history and model results are read from <code>data/iron_scalper.db</code>.</p>
             </article>
         </section>
     </main>

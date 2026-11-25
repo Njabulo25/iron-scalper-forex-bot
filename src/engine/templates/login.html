@@ -3,54 +3,55 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Iron Scalper · Sign in</title>
+<title>Iron Scalper | Operator access</title>
+<meta name="theme-color" content="#0a1420">
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}">
 <style>
     :root {
-        --bg: #0b0d10;
-        --panel: #11151a;
-        --line: #1e252d;
-        --text: #e6edf3;
-        --muted: #8b98a5;
-        --gold: #d8a33a;
-        --red: #ef4444;
+        --bg: #08121d;
+        --panel: #10202e;
+        --line: #294253;
+        --text: #e8f2f8;
+        --muted: #829aaa;
+        --accent: #57d5ca;
+        --red: #ff7e91;
     }
     * { box-sizing: border-box; }
     body {
         align-items: center; background:
-            radial-gradient(1100px 600px at 15% -10%, rgba(216, 163, 58, 0.10), transparent 60%),
+            radial-gradient(900px 560px at 18% -12%, rgba(48, 145, 156, 0.17), transparent 62%),
+            radial-gradient(800px 560px at 105% 105%, rgba(39, 101, 145, 0.12), transparent 62%),
             var(--bg);
         color: var(--text); display: flex; justify-content: center; margin: 0;
         min-height: 100vh; padding: 24px;
-        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: "Aptos", "Segoe UI Variable", "Inter", "Segoe UI", sans-serif;
     }
     .card {
-        background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45); padding: 32px; width: min(100%, 380px);
+        background: linear-gradient(155deg, rgba(18, 37, 52, 0.98), rgba(12, 26, 39, 0.98));
+        border: 1px solid #2a4354; border-radius: 18px;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.38); padding: 34px; width: min(100%, 400px);
     }
     .mark {
-        align-items: center; background: rgba(216, 163, 58, 0.12);
-        border: 1px solid rgba(216, 163, 58, 0.35); border-radius: 9px;
-        color: var(--gold); display: inline-flex; font-size: 13px; font-weight: 700;
-        height: 34px; justify-content: center; letter-spacing: 1px; margin-bottom: 18px; width: 34px;
+        display: block; height: 48px; margin-bottom: 20px; width: 48px;
     }
-    h1 { font-size: 20px; letter-spacing: -0.2px; margin: 0 0 6px; }
+    h1 { font-size: 22px; font-weight: 680; letter-spacing: -0.45px; margin: 0 0 6px; }
     .sub { color: var(--muted); font-size: 13px; margin: 0 0 22px; }
     label { color: var(--muted); display: block; font-size: 11px; letter-spacing: 0.6px;
         margin: 16px 0 7px; text-transform: uppercase; }
     input {
-        background: #0b0f13; border: 1px solid var(--line); border-radius: 8px;
+        background: #0b1824; border: 1px solid var(--line); border-radius: 9px;
         color: var(--text); font-size: 15px; padding: 11px 12px; width: 100%;
     }
-    input:focus { border-color: var(--gold); outline: none; }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(87, 213, 202, 0.10); outline: none; }
     button {
-        background: var(--gold); border: 0; border-radius: 8px; color: #14100a;
+        background: linear-gradient(135deg, #64e1d4, #37c1b7); border: 0; border-radius: 9px; color: #082128;
         cursor: pointer; font-size: 14px; font-weight: 700; margin-top: 22px;
         padding: 12px; width: 100%;
     }
     button:hover { filter: brightness(1.06); }
     .error {
-        background: rgba(239, 68, 68, 0.10); border: 1px solid rgba(239, 68, 68, 0.5);
-        border-radius: 8px; color: #fca5a5; font-size: 12px; margin-bottom: 6px; padding: 10px;
+        background: rgba(255, 126, 145, 0.10); border: 1px solid rgba(255, 126, 145, 0.42);
+        border-radius: 8px; color: #ffabb7; font-size: 12px; margin-bottom: 6px; padding: 10px;
     }
     .foot { border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px;
         line-height: 1.6; margin-top: 24px; padding-top: 14px; }
@@ -58,9 +59,9 @@
 </head>
 <body>
     <main class="card">
-        <div class="mark">IS</div>
+        <img class="mark" src="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}" alt="Iron Scalper mark">
         <h1>Iron Scalper</h1>
-        <p class="sub">Quantitative gold terminal · operator access</p>
+        <p class="sub">Quant terminal · operator access</p>
         {% if error %}<div class="error">{{ error }}</div>{% endif %}
         <form method="post" action="/login">
             <label for="username">Username</label>

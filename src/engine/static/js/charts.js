@@ -6,11 +6,11 @@ window.ISChart = (function () {
     'use strict';
 
     var COLORS = {
-        gold: '#d8a33a',
-        green: '#22c55e',
-        red: '#ef4444',
-        blue: '#3b82f6',
-        dim: '#7d8b99'
+        gold: '#57d5ca',
+        green: '#41d6a1',
+        red: '#ff7e91',
+        blue: '#7ab6ff',
+        dim: '#788f9f'
     };
 
     var tooltip = document.getElementById('tooltip');
