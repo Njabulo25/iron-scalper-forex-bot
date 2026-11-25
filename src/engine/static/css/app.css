@@ -602,6 +602,8 @@ input[type="text"] { min-width: 180px; }
 .issue::before { color: var(--red); content: "!"; font-family: var(--mono); font-weight: 700; }
 .issue.ok { color: var(--green); }
 .issue.ok::before { color: var(--green); content: "✓"; }
+.clickable-row { cursor: pointer; }
+.clickable-row:hover { background: rgba(255, 255, 255, 0.035); }
 
 .steps { counter-reset: step; list-style: none; margin: 0; padding: 8px 14px 0; }
 .steps li {

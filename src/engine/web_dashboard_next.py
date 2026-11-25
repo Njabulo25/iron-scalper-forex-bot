@@ -53,7 +53,7 @@ state_lock = threading.Lock()
 _control_lock = threading.Lock()
 
 state = {
-    "running": False, "balance": 10000, "starting_balance": 10000,
+    "running": False, "balance": None, "starting_balance": None,
     "daily_pnl": 0, "open_positions": [], "trade_history": [],
     "daily_trades": 0, "total_trades": 0, "wins": 0, "losses": 0,
     "win_rate": 0, "status": "Stopped", "bid": 0, "ask": 0,
@@ -155,11 +155,12 @@ def start():
         if trader_instance is not None and state.get("running"):
             return jsonify({"status": "already_running"})
 
-        import sys
-        sys.path.insert(0, str(PROJECT_ROOT))
-        from src.engine.live_trader import LiveTrader
-
         try:
+            import sys
+            if str(PROJECT_ROOT) not in sys.path:
+                sys.path.insert(0, str(PROJECT_ROOT))
+            from src.engine.live_trader import LiveTrader
+
             trader = LiveTrader(web_state=state, socketio=socketio, state_lock=state_lock)
         except Exception as error:
             # Connecting can fail (terminal closed, wrong account). Report it and
@@ -225,7 +226,15 @@ def api_account():
         connected = bool(state.get("mt5_connected"))
         account = dict(state.get("mt5_account") or {})
         positions = list(state.get("open_positions") or [])
-        daily_pnl = state.get("daily_pnl") or 0
+        daily_pnl = state.get("daily_pnl")
+        starting_balance = state.get("starting_balance")
+
+    try:
+        daily = get_daily_summary()
+    except Exception:
+        daily = {"total_trades": 0, "total_profit": None}
+    if not running:
+        daily_pnl = daily.get("total_profit") if daily.get("total_trades") else None
 
     balance = account.get("balance")
     equity = account.get("equity")
@@ -252,8 +261,9 @@ def api_account():
         "open_positions": len(positions),
         "open_position_pl": round(sum(float(p.get("profit") or 0) for p in positions), 2),
         "daily_pnl": daily_pnl,
+        "daily_trades": daily.get("total_trades", 0),
         "realised": realised,
-        "starting_balance": state.get("starting_balance"),
+        "starting_balance": starting_balance,
     })
 
 
@@ -371,7 +381,11 @@ def api_performance():
     start, end = _range_args()
     balance = request.args.get('balance', type=float)
     if balance is None:
-        balance = CONFIG.risk.starting_balance
+        # A configured placeholder balance is not an account measurement.
+        # The live engine publishes the real day-start balance after MT5 has
+        # connected; without that evidence, leave drawdown percentage unknown.
+        with state_lock:
+            balance = state.get("starting_balance")
 
     return jsonify({
         "summary": get_performance_summary(start, end, balance),
@@ -497,7 +511,37 @@ def api_models():
         row["feature_names"] = _json_field(row, "feature_names", [])
         row["samples"] = _json_field(row, "samples", {})
         row["out_of_sample"] = _json_field(row, "out_of_sample", {})
+        row["data"] = {
+            "fingerprint": row.get("data_fingerprint"),
+            "bars": row.get("data_bars"),
+            "first": row.get("data_first"),
+            "last": row.get("data_last"),
+        }
         versions.append(row)
+
+    # A model can be trained successfully even if its database write failed.
+    # The registry is the artifact's durable index, so include its real entries
+    # when the database does not already contain that version.
+    registry_path = Path(os.path.dirname(CONFIG.ml.model_path)) / "registry.json"
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        known_versions = {row.get("version") for row in versions}
+        for entry in registry.get("versions", []):
+            if entry.get("version") in known_versions:
+                continue
+            versions.append({
+                "version": entry.get("version"),
+                "created_at": entry.get("trained_at"),
+                "data": entry.get("data") or {},
+                "samples": entry.get("samples") or {},
+                "out_of_sample": entry.get("out_of_sample") or {},
+                "is_active": 0,
+                "registry_only": True,
+            })
+        versions.sort(key=lambda row: row.get("created_at") or "", reverse=True)
+        versions = versions[:20]
+    except (OSError, ValueError, TypeError):
+        pass
 
     runs = []
     for row in database.get_model_training_runs(20):
@@ -781,12 +825,14 @@ def upload_graph():
         return jsonify({"error": str(error), "trend": "UNABLE TO ANALYZE"})
 
 
-def run():
+def run(host="127.0.0.1", port=5000):
+    """Initialise persistent storage and serve the local dashboard."""
+    database.init_db()
     print("\n" + "=" * 50)
     print("IRON SCALPER")
     print("=" * 50)
-    print("\nhttp://localhost:5000\n")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+    print(f"\nhttp://{host}:{port}\n")
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == '__main__':

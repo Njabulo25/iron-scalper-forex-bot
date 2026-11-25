@@ -1,44 +1,46 @@
-# 🥇 Iron Scalper Forex Bot
+# Iron Scalper
 
-**Gold Never Rusts.**
+A MetaTrader 5 trading engine for XAUUSD with a responsive quantitative trading dashboard.
 
-A professional algorithmic trading bot for XAUUSD (Gold) running on MetaTrader 5. Two proven strategies with a live mobile-responsive web dashboard.
+## Strategies
 
----
+- **Daily breakout:** trades breaks of the configured Asian session range.
+- **London scalper:** looks for EMA pullbacks during its configured session, with RSI and ATR filters.
 
-## ⚠️ Risk Warning
+Performance in the dashboard comes from the local trade database. Model figures come from the saved model registry and recorded live predictions. Empty records are shown as empty; the dashboard does not substitute sample statistics.
 
-Forex and CFD trading involves substantial risk of loss. Past performance does not guarantee future results. This software is for educational purposes. Only trade with money you can afford to lose.
-
----
-
-## 📊 Strategies
-
-### Daily Breakout (The Sniper)
-- Win Rate: **80%**
-- Trades: 1 per day
-- Logic: Breaks Asian range during London open
-
-### London Scalper (The Hustler)
-- Win Rate: **35%**
-- Trades: 5-7 per day
-- Logic: Pullback entries during trending sessions
-
-### Combined (9-Month Backtest)
-- Total Trades: **1,460**
-- Total Pips: **+140,607**
-- Avg Per Trade: **+96 pips**
-
----
-
-## 🚀 Quick Start
+## Quick start on Windows
 
 ### Prerequisites
-- Python 3.10+
-- MetaTrader 5 (demo account)
 
-### Installation
-```bash
-git clone https://github.com/Njabulo25/iron-scalper-forex-bot.git
-cd iron-scalper-forex-bot
-pip install -r requirements.txt
+- Python 3.12
+- MetaTrader 5 installed and signed in to the account you intend to use
+
+### Start the terminal
+
+Double-click `run.bat`. On the first run, it creates `.venv` and installs the runtime dependencies. You can run `setup.bat` separately if you prefer to install them before opening the dashboard.
+
+Or use a terminal:
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-runtime.txt
+.venv\Scripts\python.exe main.py
+```
+
+Open <http://127.0.0.1:5000> and sign in. Starting the dashboard does not start live trading. Sign in to MT5, confirm the account and symbol in the terminal, then press **Start engine** in the dashboard. If MT5 cannot connect or fails a readiness check, the dashboard reports the reason and leaves the engine stopped.
+
+The current local login accounts are listed in `src/engine/auth.py`.
+
+To access the dashboard from another device on a trusted local network, start it with `run.bat --host 0.0.0.0`, then open the host computer's LAN address on the other device.
+
+## Data and research
+
+- Trades, risk decisions, model runs, events and collected market bars are stored in `data/iron_scalper.db`.
+- Model files and their registry are stored in `models/`.
+- Use `python train_ml.py --help` to see the supported model training and history collection commands.
+- Use the dashboard's **Backtesting** page to run a walk-forward evaluation over history already stored in the database or in the configured CSV path.
+
+## Risk warning
+
+Forex and CFD trading involves substantial risk of loss. Past performance does not guarantee future results. Start with a demo account and only trade with money you can afford to lose.
