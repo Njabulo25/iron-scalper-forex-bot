@@ -12,6 +12,7 @@ That is what makes the loop able to keep running (and the dashboard able to say
 """
 
 import logging
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 
@@ -201,21 +202,43 @@ class Broker:
                     "algorithmic trading is disabled in MetaTrader 5 "
                     "(enable the Algo Trading button and restart the bot)"
                 )
+            if self.require_algo_trading and getattr(terminal, "tradeapi_disabled", False):
+                return (
+                    "trading through the external Python API is disabled in MetaTrader 5 "
+                    "(Tools > Options > Expert Advisors: clear 'Disable automated trading "
+                    "via external Python API')"
+                )
         return ""
 
     def connect(self):
         """Initialise the terminal and verify it is the account we expect."""
         self._last_attempt = time.monotonic()
+        if self.terminal_path and not Path(self.terminal_path).is_file():
+            self.connected = False
+            self.last_error = (
+                f"Configured MetaTrader 5 terminal was not found: {self.terminal_path}. "
+                "Set mt5.terminal_path to the full path of terminal64.exe."
+            )
+            return False
+
         kwargs = {"path": self.terminal_path} if self.terminal_path else {}
+        if self.expected_login:
+            kwargs["login"] = self.expected_login
+        if self.expected_server:
+            kwargs["server"] = self.expected_server
+        initialize_exception = None
         try:
             initialized = bool(mt5.initialize(**kwargs))
         except Exception as error:
-            self.last_error = f"initialize: {error}"
+            initialize_exception = error
             initialized = False
 
         if not initialized:
             self.connected = False
-            self.last_error = self.last_error or "initialize() failed"
+            if initialize_exception is not None:
+                self.last_error = f"MT5 initialize() raised an error: {initialize_exception}"
+            else:
+                self.last_error = self._initialization_error()
             return False
 
         account = self._call("account_info")
@@ -246,6 +269,42 @@ class Broker:
         self.last_error = None
         self._backoff = self.reconnect_seconds
         return True
+
+    def _initialization_error(self):
+        """Return MT5's diagnostic and next step for a failed initialize call."""
+        try:
+            error = mt5.last_error()
+        except Exception as exc:
+            return f"MT5 initialize() failed; last_error() was unavailable: {exc}"
+
+        if isinstance(error, (tuple, list)) and len(error) >= 2:
+            code, description = error[0], str(error[1])
+        else:
+            code, description = None, str(error or "no MT5 error details")
+
+        diagnostic = f"MT5 initialize() failed ({code}: {description})"
+        if code == -6:
+            return (
+                diagnostic + ". Verify the trading account number and exact broker server "
+                "in MetaTrader 5 (these are different from an MQL5 Community login). If "
+                "needed, set IRON_SCALPER_MT5_LOGIN and IRON_SCALPER_MT5_SERVER to select "
+                "the saved account. Also confirm the terminal is signed in, and clear "
+                "'Disable automated trading via external Python API' under Tools > Options "
+                "> Expert Advisors. That setting allows Python to place orders. For a "
+                "non-standard installation, set IRON_SCALPER_MT5_PATH to terminal64.exe."
+            )
+        if code == -10003:
+            return (
+                diagnostic + ". MT5 could not establish its local IPC connection. Open "
+                "the intended terminal once, then retry; check mt5.terminal_path if its "
+                "installation is non-standard."
+            )
+        if code == -10005:
+            return (
+                diagnostic + ". The terminal did not respond in time. Open MetaTrader 5 "
+                "and retry after it finishes loading."
+            )
+        return diagnostic
 
     def disconnect(self):
         try:

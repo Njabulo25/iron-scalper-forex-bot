@@ -17,6 +17,7 @@ Nothing else in the codebase should define a trading parameter.
 
 from dataclasses import asdict, dataclass
 from datetime import time
+import os
 
 TIMEFRAMES = ("M1", "M5", "M15", "M30", "H1", "H4", "D1")
 
@@ -96,9 +97,9 @@ class MT5Config:
 
     # Terminal identity. Empty/0 means "accept whatever the terminal is signed
     # into"; set them to pin one account so a mis-launched terminal cannot trade.
-    terminal_path: str = ""
-    expected_login: int = 0
-    expected_server: str = ""
+    terminal_path: str = os.environ.get("IRON_SCALPER_MT5_PATH", "")
+    expected_login: int = int(os.environ.get("IRON_SCALPER_MT5_LOGIN", "0") or 0)
+    expected_server: str = os.environ.get("IRON_SCALPER_MT5_SERVER", "")
     require_algo_trading: bool = True
 
     def validate(self):

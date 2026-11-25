@@ -30,6 +30,8 @@ py -3.12 -m venv .venv
 
 Open <http://127.0.0.1:5000> and sign in. Starting the dashboard does not start live trading. Sign in to MT5, confirm the account and symbol in the terminal, then press **Start engine** in the dashboard. If MT5 cannot connect or fails a readiness check, the dashboard reports the reason and leaves the engine stopped.
 
+If more than one MT5 account or terminal is installed, you can select the intended saved trading account before starting the dashboard by setting `IRON_SCALPER_MT5_LOGIN`, `IRON_SCALPER_MT5_SERVER`, and optionally `IRON_SCALPER_MT5_PATH` to the full `terminal64.exe` path. The trading login and broker server must match the account saved in MT5; an MQL5 Community login is not a trading account.
+
 The current local login accounts are listed in `src/engine/auth.py`.
 
 To access the dashboard from another device on a trusted local network, start it with `run.bat --host 0.0.0.0`, then open the host computer's LAN address on the other device.

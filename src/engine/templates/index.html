@@ -679,7 +679,7 @@
                     <li><span>2</span>Double-click <code>run.bat</code>. The first run creates the Python environment and installs dependencies.</li>
                     <li><span>3</span>Open <code>http://127.0.0.1:5000</code> and sign in to the terminal.</li>
                     <li><span>4</span>Check the account, symbol and risk settings, then choose <strong>Start engine</strong>.</li>
-                    <li><span>5</span>If startup fails, open <strong>MT5 connection</strong> or <strong>Logs &amp; health</strong> for the reported issue.</li>
+                    <li><span>5</span>If MT5 reports <code>Terminal: Authorization failed</code>, verify the trading account number and exact broker server (not the MQL5 Community login). In <strong>Tools → Options → Expert Advisors</strong>, clear <code>Disable automated trading via external Python API</code> only if you intend to let Python place orders. Use <code>IRON_SCALPER_MT5_LOGIN</code>, <code>IRON_SCALPER_MT5_SERVER</code> and, if needed, <code>IRON_SCALPER_MT5_PATH</code> to select the saved account and terminal.</li>
                 </ol>
                 <p class="panel-note">The dashboard stays stopped until you start the engine. Trade history and model results are read from <code>data/iron_scalper.db</code>.</p>
             </article>
