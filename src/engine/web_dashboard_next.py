@@ -8,18 +8,20 @@ looks like a result.
 
 Routes fall into three groups:
 
-* control  - ``/start``, ``/stop``, ``/state`` and the socket update,
+* control  - ``/start``, ``/stop`` and authenticated state polling,
 * trading  - positions, account, performance, trades and their detail,
 * research - model versions, walk-forward backtests, events and health.
 """
 
 from flask import Flask, jsonify, redirect, render_template, request, session
-from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import hmac
 import json
+import logging
 import os
+import secrets
 import threading
 import time
 
@@ -27,7 +29,13 @@ import numpy as np
 
 from config.settings import CONFIG
 from src.engine import database
-from src.engine.auth import check_auth, login_required
+from src.engine.auth import (
+    admin_required,
+    authenticate,
+    login_allowed,
+    login_required,
+    record_login_attempt,
+)
 from src.engine.analytics import (
     get_daily_summary,
     get_equity_curve,
@@ -41,10 +49,61 @@ from src.engine.analytics import (
 )
 from src.engine.graph_analyzer import UPLOAD_FOLDER, analyze_chart, save_upload
 
+_APP_STARTED_MONOTONIC = time.monotonic()
+
 app = Flask(__name__, template_folder="templates", static_folder="static")
-app.config["SECRET_KEY"] = "iron-scalper-dashboard-session-key"
+app.config.update(
+    SECRET_KEY=os.environ.get("IRON_SCALPER_SECRET_KEY") or secrets.token_urlsafe(48),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Strict",
+    SESSION_COOKIE_SECURE=os.environ.get("IRON_SCALPER_COOKIE_SECURE", "").lower()
+    in {"1", "true", "yes"},
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    MAX_CONTENT_LENGTH=5 * 1024 * 1024,
+)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Compatibility export for the older dashboard module. Live state uses the
+# authenticated HTTP polling loop rather than an unauthenticated broadcast bus.
+socketio = None
+
+
+@app.context_processor
+def inject_csrf_token():
+    """Expose a session-bound token to forms and the dashboard fetch helper."""
+    if "_csrf_token" not in session:
+        session["_csrf_token"] = secrets.token_urlsafe(32)
+    return {"csrf_token": lambda: session["_csrf_token"]}
+
+
+@app.before_request
+def protect_state_changes():
+    """Require a same-session token for every unsafe HTTP method."""
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return None
+    expected = session.get("_csrf_token")
+    supplied = request.headers.get("X-CSRF-Token") or request.form.get("_csrf_token")
+    if not expected or not supplied or not hmac.compare_digest(expected, supplied):
+        return jsonify({"error": "invalid or missing CSRF token"}), 400
+    return None
+
+
+@app.after_request
+def harden_response(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data: blob:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        "frame-ancestors 'none'",
+    )
+    return response
+
 
 # The trading loop and the Flask handlers both touch ``state``, so every read
 # and write takes this lock. ``_control_lock`` serialises start/stop, which
@@ -64,6 +123,7 @@ state = {
     "mt5_ready": False, "mt5_issues": [],
     "mt5_terminal": {}, "mt5_account": {}, "mt5_symbol": {},
     "pending_orders": [], "manual_positions": 0,
+    "loop_heartbeat_epoch": 0, "loop_duration_ms": None,
     # Published by the engine at startup: the configuration it trades with.
     "config": {},
     # Published by the engine when an ML gate is configured or active.
@@ -115,30 +175,53 @@ def _json_field(row, name, default=None):
 def login():
     """Display the login form and establish an authenticated session."""
     error = None
+    setup_hint = None
+    if database.user_count() == 0:
+        setup_hint = (
+            "No operator is configured. Run "
+            "python -m src.engine.auth add-user --username <name> --role admin."
+        )
     if request.method == 'POST':
+        if not login_allowed(request.remote_addr):
+            return render_template(
+                'login.html', error="Too many attempts. Wait 15 minutes and try again.",
+                setup_hint=setup_hint,
+            ), 429
         username = request.form.get('username', '').strip()
-        pin = request.form.get('pin', '')
-        if check_auth(username, pin):
+        passphrase = request.form.get('passphrase', '')
+        user = authenticate(username, passphrase)
+        record_login_attempt(request.remote_addr, user is not None)
+        if user:
+            session.clear()
             session['logged_in'] = True
-            session['username'] = username
-            return redirect('/')
-        error = 'Invalid credentials'
-    return render_template('login.html', error=error)
+            session['username'] = user["username"]
+            session['role'] = user["role"]
+            session.permanent = True
+            session['_csrf_token'] = secrets.token_urlsafe(32)
+            return redirect('/dashboard')
+        error = 'Invalid username or passphrase. Passphrases must be at least 12 characters.'
+    return render_template('login.html', error=error, setup_hint=setup_hint)
 
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 def logout():
     """Clear the session and return the user to the login page."""
     session.clear()
-    session['logged_in'] = False
 
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
         return jsonify({"status": "logged_out"})
 
-    return redirect('/login')
+    return redirect('/')
 
 
 @app.route('/')
+def landing():
+    if session.get("logged_in") is True:
+        return redirect('/dashboard')
+    return render_template('landing.html')
+
+
+@app.route('/dashboard')
 @login_required
 def index():
     return render_template('index.html', username=session.get('username', 'User'))
@@ -147,7 +230,7 @@ def index():
 # ── control ────────────────────────────────────────────────────────
 
 @app.route('/start', methods=['POST'])
-@login_required
+@admin_required
 def start():
     global trader_instance
 
@@ -161,7 +244,7 @@ def start():
                 sys.path.insert(0, str(PROJECT_ROOT))
             from src.engine.live_trader import LiveTrader
 
-            trader = LiveTrader(web_state=state, socketio=socketio, state_lock=state_lock)
+            trader = LiveTrader(web_state=state, socketio=None, state_lock=state_lock)
         except Exception as error:
             # Connecting can fail (terminal closed, wrong account). Report it and
             # stay Stopped instead of leaving the panel stuck on "Running".
@@ -170,7 +253,6 @@ def start():
                 state["status"] = "Stopped"
                 state["mt5_connected"] = False
                 state["mt5_error"] = str(error)
-            socketio.emit('state_update', _snapshot_state())
             return jsonify({"status": "error", "error": str(error)}), 503
 
         trader_instance = trader
@@ -179,15 +261,16 @@ def start():
             state["status"] = "Running"
             state["mt5_connected"] = True
             state["mt5_error"] = ""
+            state["loop_heartbeat_epoch"] = 0
+            state["loop_duration_ms"] = None
 
         threading.Thread(target=trader.run_web, daemon=True, name="iron-trader").start()
 
-    socketio.emit('state_update', _snapshot_state())
     return jsonify({"status": "started"})
 
 
 @app.route('/stop', methods=['POST'])
-@login_required
+@admin_required
 def stop():
     global trader_instance
 
@@ -200,7 +283,6 @@ def stop():
             state["running"] = False
             state["status"] = "Stopped"
 
-    socketio.emit('state_update', _snapshot_state())
     return jsonify({"status": "stopped"})
 
 
@@ -308,9 +390,28 @@ def api_health():
         file_info = {"path": str(db_file), "size_bytes": None, "modified_at": None}
 
     with state_lock:
+        heartbeat_epoch = state.get("loop_heartbeat_epoch") or 0
+        try:
+            heartbeat_age = max(0.0, time.time() - float(heartbeat_epoch)) if heartbeat_epoch else None
+        except (TypeError, ValueError):
+            heartbeat_age = None
+        configured_interval = (
+            (state.get("config") or {}).get("execution", {}).get("loop_seconds")
+            or CONFIG.execution.loop_seconds
+        )
+        heartbeat_stale_after = max(20.0, float(configured_interval) * 5)
+        heartbeat_status = (
+            "stopped" if not state.get("running") else
+            "waiting" if heartbeat_age is None else
+            "stale" if heartbeat_age > heartbeat_stale_after else "healthy"
+        )
         engine = {
             "running": bool(state.get("running")),
             "status": state.get("status"),
+            "loop_heartbeat_status": heartbeat_status,
+            "loop_heartbeat_age_seconds": round(heartbeat_age, 1) if heartbeat_age is not None else None,
+            "loop_stale_after_seconds": round(heartbeat_stale_after, 1),
+            "loop_duration_ms": state.get("loop_duration_ms"),
             "mt5_connected": bool(state.get("mt5_connected")),
             "mt5_ready": bool(state.get("mt5_ready")),
             "feed_age_seconds": state.get("feed_age_seconds"),
@@ -335,6 +436,7 @@ def api_health():
         "counts": (health or {}).get("counts", {}) if isinstance(health, dict) else {},
         "last_trade": latest_trade[0] if latest_trade else None,
         "schema_version": health.get("schema_version") if isinstance(health, dict) else None,
+        "uptime_seconds": round(time.monotonic() - _APP_STARTED_MONOTONIC),
         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     })
 
@@ -774,6 +876,9 @@ def api_backtest_run():
         with _backtest_lock:
             return jsonify(dict(_backtest_job))
 
+    if session.get("role") != "admin":
+        return jsonify({"error": "administrator access required"}), 403
+
     payload = request.get_json(silent=True) or {}
     start = (payload.get("start") or "").strip() or None
     end = (payload.get("end") or "").strip() or None
@@ -821,18 +926,45 @@ def upload_graph():
         os.makedirs(UPLOAD_FOLDER, exist_ok=True)
         image_path = save_upload(file)
         return jsonify(analyze_chart(image_path))
+    except ValueError as error:
+        return jsonify({"error": str(error), "price_trend": "NOT ANALYZED"}), 400
     except Exception as error:
-        return jsonify({"error": str(error), "trend": "UNABLE TO ANALYZE"})
+        logging.getLogger("iron.dashboard").warning("Chart upload failed: %s", error)
+        return jsonify({"error": "The chart image could not be processed."}), 400
 
 
 def run(host="127.0.0.1", port=5000):
     """Initialise persistent storage and serve the local dashboard."""
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        if (
+            os.environ.get("IRON_SCALPER_ALLOW_REMOTE", "") != "1"
+            or not os.environ.get("IRON_SCALPER_SECRET_KEY")
+            or os.environ.get("IRON_SCALPER_COOKIE_SECURE", "").lower() not in {"1", "true", "yes"}
+        ):
+            raise ValueError(
+                "Remote binding requires IRON_SCALPER_ALLOW_REMOTE=1, a stable secret key, "
+                "and secure cookies behind a TLS reverse proxy."
+            )
+
     database.init_db()
+    Path("logs").mkdir(exist_ok=True)
+    dashboard_logger = logging.getLogger("werkzeug")
+    if not any(getattr(handler, "baseFilename", "").endswith("dashboard.log")
+               for handler in dashboard_logger.handlers):
+        from logging.handlers import RotatingFileHandler
+
+        file_handler = RotatingFileHandler(
+            "logs/dashboard.log", maxBytes=1_000_000, backupCount=5, encoding="utf-8"
+        )
+        file_handler.setFormatter(logging.Formatter(
+            "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
+        ))
+        dashboard_logger.addHandler(file_handler)
     print("\n" + "=" * 50)
     print("IRON SCALPER")
     print("=" * 50)
     print(f"\nhttp://{host}:{port}\n")
-    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+    app.run(host=host, port=port, debug=False, threaded=True)
 
 
 if __name__ == '__main__':

@@ -64,6 +64,16 @@ DATA_DIR.mkdir(exist_ok=True)
 STATE_FILE = DATA_DIR / "bot_state.json"
 
 COMMENT_PREFIX = "IronScalper_"
+BAR_CLOCK_TOLERANCE_SECONDS = 5
+TIMEFRAME_SECONDS = {
+    "M1": 60,
+    "M5": 5 * 60,
+    "M15": 15 * 60,
+    "M30": 30 * 60,
+    "H1": 60 * 60,
+    "H4": 4 * 60 * 60,
+    "D1": 24 * 60 * 60,
+}
 
 _LOG_CONFIGURED = False
 
@@ -169,6 +179,7 @@ class LiveTrader:
             expected_login=session.expected_login,
             expected_server=session.expected_server,
             require_algo_trading=session.require_algo_trading,
+            allow_live_trading=session.allow_live_trading,
             logger=logging.getLogger("iron.broker"),
         )
 
@@ -512,13 +523,21 @@ class LiveTrader:
             return timedelta(hours=2)
 
     def _signal_age_seconds(self, trade, server_now=None):
-        """How long ago the signal bar closed, measured on the broker clock."""
+        """How long ago the signal bar closed, measured on the broker clock.
+
+        Strategy timestamps identify the bar's opening time. Live MT5 history
+        includes that timestamp even after the candle closes, so use the close
+        time when the strategy has supplied it. Hand-built signals that have no
+        bar-close timestamp keep their existing timestamp semantics.
+        """
         server_now = server_now or self._server_now()
-        return (server_now - trade["time"]).total_seconds()
+        signal_time = trade.get("bar_close_time", trade["time"])
+        return (server_now - signal_time).total_seconds()
 
     def _restore_day_state(self, account):
         """Rebuild today's risk state so restarting mid-day keeps the brakes armed."""
         today = self._today()
+        self.risk_mgr.today = today
         saved = self._saved_state or {}
         saved_today = saved.get("date") in {str(today), str(datetime.now().date())}
         balance = account.balance if account else self.risk_mgr.current_balance
@@ -646,7 +665,7 @@ class LiveTrader:
                 )
                 self._settle_prediction(trade, price, net)
                 refresh_strategy_performance(close_time[:10])
-                self.risk_mgr.register_close(net)
+                self.risk_mgr.register_close(net, today=self._today())
                 self._save_state()
                 self.log.info(
                     "Closed outside the loop: trade #%s settled at %.2f (%+.2f USD)",
@@ -692,10 +711,16 @@ class LiveTrader:
     # ── Market data ────────────────────────────────────────────────
 
     def get_data(self, symbol=None, timeframe=None, bars=2000):
-        """Return recent bars as a DataFrame, or ``None`` if the feed is down."""
+        """Return fresh, closed bars or ``None`` when MT5 history is stale.
+
+        ``copy_rates_from_pos(..., 0, ...)`` includes the still-forming bar at
+        position zero. Strategies must see only completed candles, and old
+        terminal history must not be presented as a live signal.
+        """
         symbol = symbol or self.config.mt5.symbol
+        timeframe_name = timeframe or self.config.scalper.timeframe
         timeframe = (
-            self.broker.timeframe(self.config.scalper.timeframe)
+            self.broker.timeframe(timeframe_name)
             if timeframe is None else timeframe
         )
         rates = self.broker.rates(timeframe, bars)
@@ -704,7 +729,37 @@ class LiveTrader:
         try:
             frame = pd.DataFrame(rates)
             frame["time"] = pd.to_datetime(frame["time"], unit="s")
-            return frame.sort_values("time").reset_index(drop=True)
+            frame = frame.sort_values("time").reset_index(drop=True)
+            if len(frame) < 2:
+                self._block(
+                    "missing-bars", "Entry paused: waiting for enough MT5 bars to form a closed candle"
+                )
+                return None
+
+            # The last row is the current candle; its OHLC and strategy signal
+            # can still change until the next candle starts.
+            frame = frame.iloc[:-1].reset_index(drop=True)
+            bar_open = frame["time"].iloc[-1]
+            duration = TIMEFRAME_SECONDS.get(timeframe_name, 5 * 60)
+            bar_close = bar_open + timedelta(seconds=duration)
+            age = (self._server_now() - bar_close).total_seconds()
+            max_age = self.config.execution.max_signal_age_seconds
+            if age < -BAR_CLOCK_TOLERANCE_SECONDS:
+                self._block(
+                    "future-bars",
+                    f"Entry paused: latest closed {timeframe_name} bar is "
+                    f"{-age:.0f}s ahead of the MT5 clock; check terminal time/history",
+                )
+                return None
+            if age > max_age:
+                self._block(
+                    "stale-bars",
+                    f"Entry paused: latest closed {timeframe_name} bar is "
+                    f"{age:.0f}s old (max {max_age:.0f}s); refresh MT5 market history/feed",
+                )
+                return None
+
+            return frame
         except Exception:
             self.log.exception("Could not build the bar frame")
             return None
@@ -797,7 +852,9 @@ class LiveTrader:
         # or a close the reconciliation has not seen cannot stale the sizing.
         self.risk_mgr.current_balance = snapshot.account.balance
         self.risk_mgr.open_positions = snapshot.position_count()
-        allowed, reason = self.risk_mgr.can_trade()
+        allowed, reason = self.risk_mgr.can_trade(
+            current_balance=snapshot.account.balance, today=self._today()
+        )
         if not allowed:
             self._block(reason, f"Entry skipped: {reason}")
             self._db_safe(
@@ -840,9 +897,36 @@ class LiveTrader:
         if self._duplicate_nearby(snapshot.positions, side, entry):
             return None
 
+        loss_per_lot = self.broker.loss_per_lot(side, entry, stop_loss)
+        if loss_per_lot is None:
+            reason = "MT5 could not estimate stop loss in the account currency"
+            self._block("sizing-estimate", f"Entry skipped: {reason}")
+            self._db_safe(
+                "position sizing event", log_risk_event,
+                "sizing_unavailable", reason, severity="warning",
+                strategy=trade.get("strategy"), blocked=True,
+                detail={"entry": entry, "sl": stop_loss},
+            )
+            return None
+
         lots = self.risk_mgr.size_position(
-            snapshot.account.balance, entry, stop_loss, symbol_info
+            snapshot.account.balance, entry, stop_loss, symbol_info,
+            loss_per_lot=loss_per_lot,
         )
+        if lots <= 0:
+            reason = "minimum lot would exceed the configured per-trade risk budget"
+            self._block("minimum-lot-risk", f"Entry skipped: {reason}")
+            self._db_safe(
+                "minimum lot risk event", log_risk_event,
+                "minimum_lot_exceeds_risk", reason, severity="warning",
+                strategy=trade.get("strategy"), blocked=True,
+                detail={
+                    "risk_budget": round(snapshot.account.balance * self.config.risk.risk_per_trade, 2),
+                    "loss_per_lot": round(loss_per_lot, 2),
+                    "minimum_lot": getattr(symbol_info, "volume_min", None),
+                },
+            )
+            return None
         sized_ok, sized_why = self.broker.validate_volume(lots, info=symbol_info)
         if not sized_ok:
             self.log.error("Skipped %s: %s", side, sized_why)
@@ -889,7 +973,7 @@ class LiveTrader:
         fill_price = result.price or entry
         self._executed_signals.add(key)
         self._save_state()
-        self.risk_mgr.register_open()
+        self.risk_mgr.register_open(today=self._today())
 
         position_id = self.broker.resolve_position_id(result)
         position = self.broker.position_by_ticket(position_id)
@@ -959,16 +1043,24 @@ class LiveTrader:
     def _generate_signals(self, df):
         """Return signals, recomputed once per closed bar instead of every pass."""
         last_bar_time = df["time"].iloc[-1]
-        if self._cached_signals and last_bar_time == self._last_bar_time:
+        if self._last_bar_time is not None and last_bar_time == self._last_bar_time:
             return self._cached_signals
 
         upcoming = []
         server_now = self._server_now()
         offset = self._display_offset()
+        bar_duration = timedelta(
+            seconds=TIMEFRAME_SECONDS.get(self.config.scalper.timeframe, 5 * 60)
+        )
+        max_age = self.config.execution.max_signal_age_seconds
 
         if self.config.breakout.enabled:
             strategy = DailyBreakout(df, self.config.breakout)
             for trade in strategy.generate():
+                trade["bar_close_time"] = trade["time"] + bar_duration
+                age = self._signal_age_seconds(trade, server_now)
+                if not -BAR_CLOCK_TOLERANCE_SECONDS <= age <= max_age:
+                    continue
                 if trade["time"].date() == server_now.date():
                     trade["time_str"] = (trade["time"] + offset).strftime("%H:%M")
                     trade["alert"] = f"Watch for {trade['type']} at {trade['time_str']} SAST"
@@ -978,11 +1070,14 @@ class LiveTrader:
         if self.config.scalper.enabled:
             strategy = LondonScalper(df, self.config.scalper)
             for trade in strategy.generate():
-                if self._signal_age_seconds(trade, server_now) > -600:
-                    trade["time_str"] = (trade["time"] + offset).strftime("%H:%M")
-                    trade["alert"] = f"Watch for {trade['type']} at {trade['time_str']} SAST"
-                    upcoming.append(trade)
-                    self._store_signal(trade, self.config.scalper.symbol, "SCALPER")
+                trade["bar_close_time"] = trade["time"] + bar_duration
+                age = self._signal_age_seconds(trade, server_now)
+                if not -BAR_CLOCK_TOLERANCE_SECONDS <= age <= max_age:
+                    continue
+                trade["time_str"] = (trade["time"] + offset).strftime("%H:%M")
+                trade["alert"] = f"Watch for {trade['type']} at {trade['time_str']} SAST"
+                upcoming.append(trade)
+                self._store_signal(trade, self.config.scalper.symbol, "SCALPER")
 
         self._cached_signals = upcoming
         self._last_bar_time = last_bar_time
@@ -1084,7 +1179,7 @@ class LiveTrader:
                 self.log.exception("Could not close trade #%s", trade["ticket"])
                 continue
 
-            self.risk_mgr.register_close(group["net"])
+            self.risk_mgr.register_close(group["net"], today=self._today())
             self._save_state()
             self.log.info(
                 "CLOSE #%s %s %+.2f USD | day %+.2f | streak %d",
@@ -1186,6 +1281,16 @@ class LiveTrader:
         with self._state_lock:
             self.web_state.update(payload)
 
+    def _publish_loop_heartbeat(self, pass_started):
+        """Record one completed pass for the dashboard's stalled-loop watchdog."""
+        if self.web_state is None:
+            return
+        with self._state_lock:
+            self.web_state["loop_heartbeat_epoch"] = time.time()
+            self.web_state["loop_duration_ms"] = round(
+                (time.monotonic() - pass_started) * 1000, 1
+            )
+
     def _refresh_stats(self):
         """Publish realised stats and risk headroom; called once per pass."""
         if self.web_state is None:
@@ -1201,7 +1306,7 @@ class LiveTrader:
         risk = self.risk_mgr
         budget = risk.loss_limit()
         used = max(-risk.daily_pnl, 0.0)
-        allowed, reason = risk.can_trade()
+        allowed, reason = risk.can_trade(today=self._today())
 
         payload = {
             "total_trades": stats.get("total_trades", 0),
@@ -1242,7 +1347,9 @@ class LiveTrader:
             self.config.execution.loop_seconds,
         )
 
+        consecutive_failures = 0
         while not self._stop:
+            pass_started = time.monotonic()
             try:
                 snapshot = self.broker.poll()
 
@@ -1258,7 +1365,11 @@ class LiveTrader:
                     self._block("loop-connection", "Waiting for MT5 to come back")
                     self._refresh_stats()
                     self._emit()
-                    time.sleep(self.config.execution.loop_seconds)
+                    consecutive_failures = 0
+                    self._publish_loop_heartbeat(pass_started)
+                    wait = self.config.execution.loop_seconds - (time.monotonic() - pass_started)
+                    if wait > 0:
+                        time.sleep(wait)
                     continue
 
                 self._sync_positions(snapshot)
@@ -1268,13 +1379,9 @@ class LiveTrader:
                 frame = self.get_data(session.symbol, bars=2000)
                 signals = self._generate_signals(frame) if frame is not None else []
 
-                if frame is not None:
-                    self._publish_market(snapshot, signals)
-
-                # Stats come from the database, so a data outage must not
-                # freeze them: refresh exactly once per pass, either way.
-                self._refresh_stats()
-                self._emit()
+                # Clear old dashboard signals even while MT5 is waiting for
+                # fresh bars, and keep the quote/account snapshot current.
+                self._publish_market(snapshot, signals)
 
                 server_now = self._server_now()
                 for trade in signals:
@@ -1288,16 +1395,36 @@ class LiveTrader:
                     # through place_trade -> spread -> risk -> broker.
                     self.place_trade(trade)
 
-                time.sleep(self.config.execution.loop_seconds)
+                # Execute eligible entries before dashboard-only DB summaries.
+                # Stats still refresh once per pass, but cannot add latency to
+                # a signal that is ready to send.
+                self._refresh_stats()
+                self._emit()
+
+                consecutive_failures = 0
+                self._publish_loop_heartbeat(pass_started)
+                wait = self.config.execution.loop_seconds - (time.monotonic() - pass_started)
+                if wait > 0:
+                    time.sleep(wait)
 
             except Exception as error:
+                consecutive_failures += 1
                 self.log.exception("Loop pass failed; continuing")
                 self._db_safe(
                     "loop error event", log_system_event,
                     f"loop pass failed: {error}", level="error", category="loop",
                 )
                 self._save_state()
-                time.sleep(30)
+                self._publish_loop_heartbeat(pass_started)
+                backoff = min(
+                    self.config.execution.loop_seconds
+                    * (2 ** min(consecutive_failures - 1, 4)),
+                    15.0,
+                )
+                self.log.warning(
+                    "Trading loop retry %d in %.1fs", consecutive_failures, backoff
+                )
+                time.sleep(backoff)
 
         self._save_state()
         self.broker.disconnect()

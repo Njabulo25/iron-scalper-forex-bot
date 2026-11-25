@@ -7,8 +7,9 @@ tested without a terminal. Open-position count is *not* tracked here any more â€
 MT5 is the single source of truth for what is open.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import ROUND_DOWN, Decimal
+import math
 
 
 class RiskManager:
@@ -31,8 +32,10 @@ class RiskManager:
         self.open_positions = 0
         self.consecutive_losses = 0
 
-    def _reset_daily(self):
-        today = date.today()
+    def _reset_daily(self, today=None):
+        today = today or date.today()
+        if isinstance(today, datetime):
+            today = today.date()
         if today != self.today:
             self.today = today
             self.daily_trades = 0
@@ -44,11 +47,10 @@ class RiskManager:
     def loss_limit(self):
         return self.max_daily_risk * (self.day_start_balance or self.initial_balance)
 
-    def can_trade(self, current_balance=None):
-        self._reset_daily()
-
+    def can_trade(self, current_balance=None, today=None):
         if current_balance is not None:
             self.current_balance = current_balance
+        self._reset_daily(today)
 
         if self.daily_pnl <= -self.loss_limit():
             return False, "Daily loss limit hit"
@@ -64,44 +66,52 @@ class RiskManager:
 
         return True, "OK"
 
-    def size_position(self, balance, entry_price, stop_loss, symbol_info):
-        """Lots that risk ``risk_per_trade`` of ``balance``, within broker limits.
+    def size_position(self, balance, entry_price, stop_loss, symbol_info, loss_per_lot):
+        """Return lots within budget using MT5's account-currency loss estimate.
 
         Rounds **down** to the broker's volume step: never round a risk position
-        up. Returns 0.0 when the inputs cannot produce a valid size.
+        up. Returns 0.0 when the broker minimum would exceed the risk budget or
+        when the supplied loss estimate is invalid.
         """
         if symbol_info is None:
             return 0.0
 
-        contract = float(getattr(symbol_info, "trade_contract_size", 0) or 0)
         vol_min = float(getattr(symbol_info, "volume_min", 0) or 0)
         vol_max = float(getattr(symbol_info, "volume_max", 0) or 0)
         vol_step = float(getattr(symbol_info, "volume_step", 0) or 0)
-        distance = abs(entry_price - stop_loss)
+        loss_per_lot = float(loss_per_lot or 0)
 
-        if contract <= 0 or vol_min <= 0 or vol_step <= 0 or vol_max < vol_min or distance <= 0:
+        if (
+            not math.isfinite(loss_per_lot) or loss_per_lot <= 0
+            or not math.isfinite(float(balance)) or balance <= 0
+            or vol_min <= 0 or vol_step <= 0 or vol_max < vol_min
+        ):
             return 0.0
 
-        risk_amount = max(balance, 0.0) * self.risk_per_trade
-        raw_lots = risk_amount / (distance * contract)
+        risk_amount = float(balance) * self.risk_per_trade
+        raw_lots = risk_amount / loss_per_lot
+        if raw_lots + 1e-12 < vol_min:
+            return 0.0
 
         step = Decimal(str(vol_step))
         steps = (Decimal(str(raw_lots)) / step).to_integral_value(rounding=ROUND_DOWN)
-        lots = steps * step
-        lots = min(lots, Decimal(str(vol_max)))
-        lots = max(lots, Decimal(str(vol_min)))
+        max_steps = (Decimal(str(vol_max)) / step).to_integral_value(rounding=ROUND_DOWN)
+        lots = min(steps, max_steps) * step
+        if lots < Decimal(str(vol_min)):
+            return 0.0
         return float(lots)
 
-    def register_open(self):
+    def register_open(self, today=None):
         """Count a filled entry against the daily trade budget."""
+        self._reset_daily(today)
         self.daily_trades += 1
 
-    def register_close(self, profit_loss):
+    def register_close(self, profit_loss, today=None):
         """Register realised P/L from a closed trade.
 
         This is what feeds the daily-loss limit and the consecutive-loss stop.
         """
-        self._reset_daily()
+        self._reset_daily(today)
         profit_loss = float(profit_loss)
         self.daily_pnl += profit_loss
         self.current_balance += profit_loss

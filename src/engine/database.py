@@ -21,7 +21,7 @@ Three rules shape this module:
    the process writes about itself (``created_at``) are UTC. Both are
    documented per table and normalised on the way in.
 
-Schema as of version 1:
+Schema as of version 2:
 
     trades              one row per MT5 position this bot opened (or adopted)
     trade_executions    the MT5 order that produced each trade, request vs fill
@@ -36,7 +36,7 @@ Schema as of version 1:
     risk_events         risk decisions and violations (why a trade was refused)
     system_events       connection, order and operational events
     daily_stats         legacy, unused: superseded by strategy_performance
-    users               dashboard accounts
+    users               dashboard accounts with salted passphrase hashes
 """
 
 import hashlib
@@ -46,12 +46,15 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+import re
+
+from src.engine.credentials import hash_passphrase, verify_passphrase
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATABASE_PATH = PROJECT_ROOT / "data" / "iron_scalper.db"
 
 TS_FORMAT = "%Y-%m-%d %H:%M:%S"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Databases whose schema has already been checked in this process. The bot runs
 # a 2 second loop, so re-running migrations on every query was wasted work.
@@ -604,8 +607,31 @@ def _migration_001_baseline(connection):
     )
 
 
+def _migration_002_hash_user_passphrases(connection):
+    """Replace stored dashboard PINs with salted scrypt hashes."""
+    if not _has_table(connection, "users"):
+        return
+
+    _add_column(connection, "users", "pin_hash", "TEXT NOT NULL DEFAULT ''")
+    for row in connection.execute(
+        "SELECT id, pin, pin_hash FROM users WHERE pin <> '' OR pin_hash = ''"
+    ).fetchall():
+        if row["pin_hash"]:
+            if row["pin"]:
+                connection.execute("UPDATE users SET pin = '' WHERE id = ?", (row["id"],))
+            continue
+        passphrase = row["pin"] or ""
+        if not passphrase:
+            continue
+        connection.execute(
+            "UPDATE users SET pin = '', pin_hash = ? WHERE id = ?",
+            (hash_passphrase(passphrase), row["id"]),
+        )
+
+
 MIGRATIONS = (
     (1, "baseline schema, execution/risk/model history, indexes", _migration_001_baseline),
+    (2, "hash dashboard credentials", _migration_002_hash_user_passphrases),
 )
 
 
@@ -1655,8 +1681,14 @@ def get_system_events(limit=100, level=None, category=None):
 # ── users ──────────────────────────────────────────────────────────
 
 
-def add_user(username, pin, role):
-    """Create a user and return ``True`` when the username was available."""
+def add_user(username, passphrase, role):
+    """Create a user with a hashed passphrase; return False for duplicate names."""
+    username = str(username or "").strip()
+    passphrase = str(passphrase or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", username):
+        raise ValueError("username must be 1-32 letters, digits, dots, dashes, or underscores")
+    if len(passphrase) < 12:
+        raise ValueError("passphrase must be at least 12 characters")
     if role not in {"admin", "viewer"}:
         raise ValueError("role must be 'admin' or 'viewer'")
 
@@ -1664,20 +1696,47 @@ def add_user(username, pin, role):
     try:
         with _DatabaseConnection() as connection:
             connection.execute(
-                "INSERT INTO users (username, pin, role) VALUES (?, ?, ?)",
-                (username, pin, role),
+                "INSERT INTO users (username, pin, role, pin_hash) VALUES (?, '', ?, ?)",
+                (username, role, hash_passphrase(passphrase)),
             )
     except sqlite3.IntegrityError:
         return False
     return True
 
 
-def verify_user(username, pin):
-    """Return whether the supplied username and PIN match a stored user."""
+def set_user_passphrase(username, passphrase):
+    """Replace one user's passphrase, returning False when the user is absent."""
+    if len(str(passphrase or "")) < 12:
+        raise ValueError("passphrase must be at least 12 characters")
+    _ensure_ready()
+    with _DatabaseConnection() as connection:
+        cursor = connection.execute(
+            "UPDATE users SET pin = '', pin_hash = ? WHERE username = ?",
+            (hash_passphrase(passphrase), str(username or "").strip()),
+        )
+    return cursor.rowcount == 1
+
+
+def authenticate_user(username, passphrase):
+    """Return the non-secret account record if a passphrase matches."""
     _ensure_ready()
     with _DatabaseConnection() as connection:
         row = connection.execute(
-            "SELECT 1 FROM users WHERE username = ? AND pin = ?",
-            (username, pin),
+            "SELECT username, role, pin_hash FROM users WHERE username = ?",
+            (str(username or "").strip(),),
         ).fetchone()
-    return row is not None
+    if row is None or not verify_passphrase(passphrase, row["pin_hash"]):
+        return None
+    return {"username": row["username"], "role": row["role"]}
+
+
+def verify_user(username, pin):
+    """Compatibility wrapper that verifies a stored user's passphrase."""
+    return authenticate_user(username, pin) is not None
+
+
+def user_count():
+    """Number of configured dashboard accounts."""
+    _ensure_ready()
+    with _DatabaseConnection() as connection:
+        return int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])

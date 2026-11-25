@@ -162,10 +162,15 @@ code {
 }
 .user-row strong { display: block; font-size: 12px; font-weight: 600; }
 .user-row span { color: var(--muted); font-size: 10px; }
+.logout-form { display: flex; margin-left: auto; }
 .user-row .logout {
+    background: transparent;
+    border: 0;
     color: var(--muted);
+    cursor: pointer;
     font-size: 10.5px;
-    margin-left: auto;
+    font-family: inherit;
+    padding: 0;
     text-decoration: none;
 }
 .user-row .logout:hover { color: var(--red); }
@@ -210,6 +215,7 @@ code {
     width: 32px;
 }
 .icon-btn:hover { color: var(--text); border-color: #2b343e; }
+.icon-btn svg { fill: none; height: 16px; stroke: currentColor; stroke-linecap: round; stroke-width: 1.7; vertical-align: middle; width: 16px; }
 
 .badge {
     border: 1px solid var(--line);

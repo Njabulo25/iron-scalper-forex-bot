@@ -95,6 +95,11 @@
     async function api(url, options) {
         options = options || {};
         var headers = Object.assign({ 'X-Requested-With': 'XMLHttpRequest' }, options.headers || {});
+        var method = String(options.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+            var token = document.querySelector('meta[name="csrf-token"]');
+            if (token) headers['X-CSRF-Token'] = token.content;
+        }
         if (typeof options.body === 'string' && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
         var response = await fetch(url, Object.assign({ credentials: 'same-origin', headers: headers }, options));
         if (response.status === 401) {
@@ -708,6 +713,7 @@
         detailList('health-db', [
             ['Health', database.error ? 'Error' : database.schema_version ? 'Healthy' : (payload.error || 'Available')],
             ['Schema version', payload.schema_version], ['Journal mode', database.journal_mode],
+            ['Dashboard uptime', isNum(payload.uptime_seconds) ? number(payload.uptime_seconds, 0) + ' sec' : '—'],
             ['Foreign keys', database.foreign_keys], ['Busy timeout', isNum(database.busy_timeout) ? number(database.busy_timeout, 0) + ' ms' : '—'],
             ['File size', isNum(file.size_bytes) ? number(file.size_bytes, 0) + ' bytes' : '—'], ['Modified', dateText(file.modified_at, true)]
         ]);
@@ -715,6 +721,9 @@
         detailList('health-counts', Object.keys(counts).sort().map(function (key) { return [key.replace(/_/g, ' '), number(counts[key], 0)]; }));
         detailList('health-engine', [
             ['Status', engine.status || (engine.running ? 'Running' : 'Stopped')], ['MT5', engine.mt5_connected ? 'Connected' : 'Disconnected'],
+            ['Loop heartbeat', engine.loop_heartbeat_status || '—'],
+            ['Loop age', isNum(engine.loop_heartbeat_age_seconds) ? number(engine.loop_heartbeat_age_seconds, 1) + ' sec' : '—'],
+            ['Loop duration', isNum(engine.loop_duration_ms) ? number(engine.loop_duration_ms, 1) + ' ms' : '—'],
             ['Readiness', engine.mt5_ready ? 'Ready' : 'Not ready'], ['Feed age', isNum(engine.feed_age_seconds) ? number(engine.feed_age_seconds, 1) + ' sec' : '—'],
             ['Reconnects', number(engine.reconnects, 0)], ['Trading allowed', engine.trading_allowed === true ? 'Yes' : engine.trading_allowed === false ? 'No' : '—'],
             ['Risk gate', engine.risk_reason || '—'], ['ML gate', engine.ml && engine.ml.active ? 'Active' : 'Inactive'],
@@ -872,6 +881,10 @@
         var start = $('#btn-start'), stop = $('#btn-stop');
         if (start) start.addEventListener('click', function () { control('/start', 'Engine started.'); });
         if (stop) stop.addEventListener('click', function () { control('/stop', 'Engine stopped.'); });
+        var logoutForm = $('.logout-form');
+        if (logoutForm) logoutForm.addEventListener('submit', function (event) {
+            if (!window.confirm('Sign out of the terminal?')) event.preventDefault();
+        });
         var menu = $('[data-open-nav]');
         if (menu) menu.addEventListener('click', openNavigation);
         var scrim = $('[data-close-nav]');
@@ -925,7 +938,7 @@
                 var preview = $('#graph-preview');
                 if (preview) { preview.src = URL.createObjectURL(fileInput.files[0]); preview.hidden = false; }
                 if (result.error) toast(result.error, true);
-                else toast('Chart image analysed.');
+                else toast('Image measurements ready.');
             } catch (error) { showError(error); }
         });
         document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeDrawer(); });
@@ -953,39 +966,11 @@
                 loadPerformance(window.location.hash === '#overview' ? 'overview' : 'performance', lastPerformanceRange).catch(function () {});
             }
         }, 30000);
+        setInterval(function () {
+            if (window.location.hash === '#logs') loadHealth().catch(function () {});
+        }, 15000);
     }
 
     bindEvents();
-    if (window.io) {
-        try {
-            var socket = window.io({ transports: ['websocket', 'polling'] });
-            socket.on('state_update', function (payload) {
-                renderHeader(payload);
-                var positions = Object.assign({}, state.positions, {
-                    running: !!payload.running, connected: !!payload.mt5_connected,
-                    positions: payload.open_positions || [], pending: payload.pending_orders || [],
-                    symbol: (payload.mt5_symbol || {}).name, bid: payload.bid, ask: payload.ask,
-                    manual_positions: payload.manual_positions, trading_allowed: payload.trading_allowed,
-                    risk_reason: payload.risk_reason
-                });
-                renderPositions(positions);
-                if (payload.ml) { state.ml = Object.assign({}, state.ml || {}, { status: payload.ml }); renderMLStatus(); }
-                if (payload.mt5_account && payload.mt5_account.balance !== undefined) {
-                    var account = Object.assign({}, state.account || {}, {
-                        account: payload.mt5_account,
-                        balance: payload.mt5_account.balance,
-                        equity: payload.mt5_account.equity,
-                        margin_free: payload.mt5_account.margin_free,
-                        margin_used: payload.mt5_account.margin,
-                        currency: payload.mt5_account.currency,
-                        live: !!payload.mt5_connected,
-                        engine_running: !!payload.running,
-                        daily_pnl: payload.daily_pnl
-                    });
-                    renderAccount(account);
-                }
-            });
-        } catch (_) { /* HTTP polling remains available if the socket client is offline. */ }
-    }
     initialLoad();
 })();

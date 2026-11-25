@@ -12,6 +12,7 @@ That is what makes the loop able to keep running (and the dashboard able to say
 """
 
 import logging
+import math
 from pathlib import Path
 import time
 from datetime import datetime, timezone
@@ -32,8 +33,11 @@ INVALID_FILL_CODES = (getattr(mt5, "TRADE_RETCODE_INVALID_FILL", 10030),)
 FILLING_FOK = getattr(mt5, "ORDER_FILLING_FOK", 0)
 
 POSITION_TYPE_BUY = getattr(mt5, "POSITION_TYPE_BUY", 0)
+ORDER_TYPE_BUY = getattr(mt5, "ORDER_TYPE_BUY", 0)
+ORDER_TYPE_SELL = getattr(mt5, "ORDER_TYPE_SELL", 1)
 
 SYMBOL_TRADE_MODE_FULL = getattr(mt5, "SYMBOL_TRADE_MODE_FULL", 4)
+ACCOUNT_TRADE_MODE_REAL = getattr(mt5, "ACCOUNT_TRADE_MODE_REAL", 2)
 TRADE_MODE_TEXT = {
     0: "disabled",
     1: "close only",
@@ -128,6 +132,7 @@ class Broker:
         expected_login=0,
         expected_server="",
         require_algo_trading=True,
+        allow_live_trading=False,
         logger=None,
     ):
         self.symbol = symbol
@@ -140,6 +145,9 @@ class Broker:
         self.expected_login = int(expected_login or 0)
         self.expected_server = expected_server or ""
         self.require_algo_trading = bool(require_algo_trading)
+        self.allow_live_trading = bool(allow_live_trading)
+        self._session_login = None
+        self._session_server = None
 
         self.connected = False
         self.reconnects = 0
@@ -194,6 +202,21 @@ class Broker:
                 f"terminal server {server!r} does not match expected "
                 f"{self.expected_server!r}"
             )
+        if self._session_login is not None and login != self._session_login:
+            return f"terminal account changed during this run (now {login}, started on {self._session_login})"
+        if (
+            self._session_server is not None
+            and server.lower() != self._session_server.lower()
+        ):
+            return "terminal broker server changed during this run"
+        if (
+            getattr(account, "trade_mode", None) == ACCOUNT_TRADE_MODE_REAL
+            and not self.allow_live_trading
+        ):
+            return (
+                "live-account trading is disabled; explicitly set "
+                "IRON_SCALPER_ALLOW_LIVE_TRADING=1 after reviewing the risk settings"
+            )
         if terminal is not None:
             if getattr(terminal, "connected", True) is False:
                 return "terminal is not connected to its trade server"
@@ -201,6 +224,12 @@ class Broker:
                 return (
                     "algorithmic trading is disabled in MetaTrader 5 "
                     "(enable the Algo Trading button and restart the bot)"
+                )
+            if self.require_algo_trading and getattr(terminal, "tradeapi_disabled", False):
+                return (
+                    "trading through the external Python API is disabled in MetaTrader 5 "
+                    "(Tools > Options > Expert Advisors: clear 'Disable automated trading "
+                    "via external Python API')"
                 )
             if self.require_algo_trading and getattr(terminal, "tradeapi_disabled", False):
                 return (
@@ -245,6 +274,7 @@ class Broker:
         if account is None:
             self.connected = False
             self.last_error = "account_info() unavailable"
+            self.disconnect()
             return False
 
         terminal = self._optional("terminal_info")
@@ -253,6 +283,7 @@ class Broker:
             self.connected = False
             self.last_error = mismatch
             self.log.error("Refusing this MT5 session: %s", mismatch)
+            self.disconnect()
             return False
 
         select = getattr(mt5, "symbol_select", None)
@@ -262,8 +293,12 @@ class Broker:
         if self._call("symbol_info", self.symbol) is None:
             self.connected = False
             self.last_error = f"symbol {self.symbol} is not available on this account"
+            self.disconnect()
             return False
 
+        if self._session_login is None:
+            self._session_login = getattr(account, "login", None)
+            self._session_server = getattr(account, "server", "") or ""
         self.connected = True
         self.last_ok = time.monotonic()
         self.last_error = None
@@ -347,6 +382,13 @@ class Broker:
         account = self._call("account_info")
         tick = self._call("symbol_info_tick", self.symbol)
 
+        if account is not None:
+            identity_problem = self._identity_error(account, self._optional("terminal_info"))
+            if identity_problem:
+                self.connected = False
+                self.last_error = identity_problem
+                account = None
+
         if account is None or tick is None:
             missing = [
                 name for name, value in (("account", account), ("quote", tick))
@@ -416,10 +458,18 @@ class Broker:
                 issues.append("terminal lost its trade-server connection")
             if self.require_algo_trading and getattr(terminal, "trade_allowed", True) is False:
                 issues.append("algorithmic trading is disabled in the terminal")
+            if self.require_algo_trading and getattr(terminal, "tradeapi_disabled", False):
+                issues.append("trading through the external Python API is disabled in the terminal")
+        else:
+            issues.append("terminal information is unavailable")
         if account is None:
             issues.append("account information is unavailable")
-        elif getattr(account, "trade_allowed", True) is False:
-            issues.append("this account is not permitted to trade")
+        else:
+            identity_problem = self._identity_error(account, terminal)
+            if identity_problem and identity_problem not in issues:
+                issues.append(identity_problem)
+            if getattr(account, "trade_allowed", True) is False:
+                issues.append("this account is not permitted to trade")
 
         if info is None:
             issues.append(f"symbol {self.symbol} is unavailable")
@@ -479,6 +529,7 @@ class Broker:
             "margin_level": _rounded(getattr(account, "margin_level", None), 1),
             "trade_allowed": bool(getattr(account, "trade_allowed", True)),
             "trade_expert": bool(getattr(account, "trade_expert", True)),
+            "trade_mode": getattr(account, "trade_mode", None),
         }
 
     def symbol_summary(self, info=None):
@@ -519,6 +570,29 @@ class Broker:
 
     def symbol_info(self):
         return self._call("symbol_info", self.symbol)
+
+    def loss_per_lot(self, side, entry, stop_loss):
+        """Estimate stop-loss exposure for one lot in the account currency.
+
+        MT5 performs the symbol and deposit-currency conversion. Contract-size
+        multiplication alone is wrong for accounts whose deposit currency
+        differs from the symbol's quote currency.
+        """
+        calculator = getattr(mt5, "order_calc_profit", None)
+        if calculator is None or side not in {"BUY", "SELL"}:
+            return None
+        action = ORDER_TYPE_BUY if side == "BUY" else ORDER_TYPE_SELL
+        result = self._call(
+            "order_calc_profit", action, self.symbol, 1.0,
+            float(entry), float(stop_loss),
+        )
+        try:
+            loss = -float(result)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(loss) or loss <= 0:
+            return None
+        return loss
 
     def tick(self):
         return self._call("symbol_info_tick", self.symbol)
@@ -640,7 +714,17 @@ class Broker:
         filled the order. Reading positions before retrying is what stops a
         retry from opening a second position.
         """
-        for ticket in self._position_tickets() - before:
+        candidates = self._position_tickets() - before
+        for position in self.positions():
+            ticket = getattr(position, "ticket", 0)
+            if ticket not in candidates:
+                continue
+            if getattr(position, "symbol", self.symbol) != request.get("symbol", self.symbol):
+                continue
+            if getattr(position, "magic", None) != request.get("magic"):
+                continue
+            if getattr(position, "type", None) != request.get("type"):
+                continue
             self.log.warning(
                 "Order outcome was unknown (%s); MT5 now holds position %s", note, ticket
             )
@@ -665,16 +749,19 @@ class Broker:
             attempts += 1
 
             checker = getattr(mt5, "order_check", None)
-            if checker is not None:
-                try:
-                    check = checker(pending)
-                except Exception:
-                    check = None
-                if check is not None and getattr(check, "retcode", 0) != 0:
-                    return OrderResult(
-                        False, getattr(check, "retcode", None),
-                        f"order_check: {getattr(check, 'comment', '')}", attempts=attempts,
-                    )
+            if checker is None:
+                return OrderResult(False, None, "order_check unavailable", attempts=attempts)
+            try:
+                check = checker(pending)
+            except Exception as error:
+                return OrderResult(False, None, f"order_check failed: {error}", attempts=attempts)
+            if check is None:
+                return OrderResult(False, None, "order_check returned no result", attempts=attempts)
+            if getattr(check, "retcode", None) != 0:
+                return OrderResult(
+                    False, getattr(check, "retcode", None),
+                    f"order_check: {getattr(check, 'comment', '')}", attempts=attempts,
+                )
 
             try:
                 result = mt5.order_send(pending)

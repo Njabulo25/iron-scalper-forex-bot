@@ -101,6 +101,9 @@ class MT5Config:
     expected_login: int = int(os.environ.get("IRON_SCALPER_MT5_LOGIN", "0") or 0)
     expected_server: str = os.environ.get("IRON_SCALPER_MT5_SERVER", "")
     require_algo_trading: bool = True
+    allow_live_trading: bool = os.environ.get("IRON_SCALPER_ALLOW_LIVE_TRADING", "").lower() in {
+        "1", "true", "yes",
+    }
 
     def validate(self):
         if not self.symbol:

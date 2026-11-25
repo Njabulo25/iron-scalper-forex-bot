@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Iron Scalper | Operator access</title>
 <meta name="theme-color" content="#0a1420">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}">
 <style>
     :root {
@@ -62,12 +63,14 @@
         <img class="mark" src="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}" alt="Iron Scalper mark">
         <h1>Iron Scalper</h1>
         <p class="sub">Quant terminal · operator access</p>
-        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+        {% if setup_hint %}<p class="foot">{{ setup_hint }}</p>{% endif %}
         <form method="post" action="/login">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <label for="username">Username</label>
             <input id="username" name="username" type="text" autocomplete="username" required autofocus>
-            <label for="pin">PIN</label>
-            <input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" required>
+            <label for="passphrase">Passphrase</label>
+            <input id="passphrase" name="passphrase" type="password" autocomplete="current-password" minlength="12" required>
             <button type="submit">Sign in</button>
         </form>
         <p class="foot">

@@ -39,18 +39,19 @@ def _install_stubs():
 
     fake = {
         "positions": [], "orders": [], "pending": [], "history": [],
-        "opening_deals": {},
+        "opening_deals": {}, "fx_rate": 1.0,
     }
 
     mt5.initialize = lambda *a, **k: True
     mt5.shutdown = lambda *a, **k: True
     mt5.symbol_select = lambda *a, **k: True
     mt5.order_check = lambda request: types.SimpleNamespace(retcode=0, comment="ok")
-    mt5.account_info = lambda: types.SimpleNamespace(
+    fake["account"] = types.SimpleNamespace(
         login=777, server="RCG-Demo", company="RCG Markets", currency="ZAR",
         leverage=500, balance=10000.0, equity=10000.0, margin_free=10000.0,
-        trade_allowed=True, trade_expert=True,
+        trade_allowed=True, trade_expert=True, trade_mode=0,
     )
+    mt5.account_info = lambda: fake["account"]
     mt5.terminal_info = lambda: types.SimpleNamespace(
         name="MetaTrader 5", company="MetaQuotes Software Corp.",
         path="C:/Program Files/MetaTrader 5/terminal64.exe",
@@ -64,6 +65,11 @@ def _install_stubs():
     mt5.symbol_info = lambda symbol=None: types.SimpleNamespace(
         trade_contract_size=100.0, volume_min=0.01, volume_max=10.0, volume_step=0.01,
         point=0.01, digits=2, trade_stops_level=0, trade_mode=4, visible=True,
+    )
+    mt5.order_calc_profit = lambda action, symbol, volume, opened, closed: (
+        (closed - opened) * 100.0 * volume * fake["fx_rate"]
+        if action == mt5.ORDER_TYPE_BUY
+        else (opened - closed) * 100.0 * volume * fake["fx_rate"]
     )
 
     def order_send(request):
@@ -116,6 +122,7 @@ def _position(ticket, magic=123456, side=0, price=2000.0, sl=1995.0, tp=2010.0,
               volume=0.10, comment="IronScalper_BREAKOUT"):
     return types.SimpleNamespace(
         ticket=ticket, magic=magic, type=side, price_open=price, sl=sl, tp=tp,
+        symbol="XAUUSD",
         volume=volume, comment=comment, profit=0.0,
         time=int(datetime.now().timestamp()),
     )
@@ -465,7 +472,7 @@ def main():
     orders_before = len(fake["orders"])
     recovered = trader.broker.send_order(
         {"action": 1, "symbol": "XAUUSD", "volume": 0.10, "price": 2000.0,
-         "sl": 1995.0, "tp": 2010.0, "type": 0}, "BUY")
+         "sl": 1995.0, "tp": 2010.0, "type": 0, "magic": 123456}, "BUY")
     mt5.order_send = real_send
     fake["positions"] = []
     check(
@@ -483,7 +490,50 @@ def main():
     )
     check("a fill that ignores volume and stops is reported", not honoured and len(notes) >= 3)
 
-    # 24. The central config is valid, complete and JSON-safe.
+    # 24. Broker-currency loss estimates, minimum-lot brakes and account guards.
+    fake["fx_rate"] = 18.0
+    converted_loss = trader.broker.loss_per_lot("BUY", 2000.0, 1995.0)
+    fake["fx_rate"] = 1.0
+    check("stop exposure uses MT5 deposit-currency conversion",
+          converted_loss is not None and abs(converted_loss - 9000.0) < 1e-8)
+
+    sizing = RiskManager(1000.0, risk_per_trade=0.01)
+    size_info = types.SimpleNamespace(volume_min=0.01, volume_max=1.0, volume_step=0.01)
+    check(
+        "position sizing refuses a broker minimum above the risk budget",
+        sizing.size_position(1000.0, 2000.0, 1995.0, size_info, 1001.0) == 0.0,
+    )
+    check(
+        "position sizing rounds down to stay inside the risk budget",
+        sizing.size_position(1000.0, 2000.0, 1995.0, size_info, 510.0) == 0.01,
+    )
+
+    original_order_check = mt5.order_check
+    mt5.order_check = lambda request: None
+    orders_before_check = len(fake["orders"])
+    unchecked = trader.broker.send_order(
+        {"action": 1, "symbol": "XAUUSD", "volume": 0.01, "price": 2000.0,
+         "sl": 1995.0, "tp": 2010.0, "type": 0, "magic": 123456}, "BUY")
+    mt5.order_check = original_order_check
+    check(
+        "an unavailable order pre-check prevents submission",
+        not unchecked.ok and len(fake["orders"]) == orders_before_check,
+    )
+
+    from src.engine.broker import Broker
+    real_account = fake["account"]
+    fake["account"] = types.SimpleNamespace(**dict(vars(real_account), trade_mode=2))
+    live_blocked = Broker("XAUUSD", 123456)
+    check("live accounts are blocked by default", not live_blocked.connect())
+    live_opt_in = Broker("XAUUSD", 123456, allow_live_trading=True)
+    check("live trading requires the explicit opt-in", live_opt_in.connect())
+    fake["account"] = types.SimpleNamespace(**dict(vars(real_account), login=778))
+    switched = live_opt_in.poll()
+    check("account changes fail closed during a run", not switched.healthy)
+    fake["account"] = real_account
+    live_opt_in.disconnect()
+
+    # 25. The central config is valid, complete and JSON-safe.
     config_snapshot = CONFIG.snapshot()
     check(
         "config exposes every trading group",
@@ -507,14 +557,14 @@ def main():
         and abs(trader.risk_mgr.max_daily_risk - CONFIG.risk.max_daily_loss_pct) < 1e-12,
     )
 
-    # 25. The loss-streak stop is configurable, not a literal 3.
+    # 26. The loss-streak stop is configurable, not a literal 3.
     strict = RiskManager(10000, max_consecutive_losses=2)
     strict.register_close(-10.0)
     strict.register_close(-10.0)
     allowed, reason = strict.can_trade()
     check("the loss-streak stop follows the config", not allowed and "consecutive" in reason)
 
-    # 26. The database records what the engine did, not only the trade result.
+    # 27. The database records what the engine did, not only the trade result.
     executions = database.get_executions(limit=20)
     check("an order execution is recorded with its fill", bool(executions) and executions[0]["order_ticket"] is not None)
     check("the configuration snapshot is stored", bool(database.get_trading_settings(5)))

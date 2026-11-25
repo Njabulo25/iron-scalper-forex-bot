@@ -193,7 +193,7 @@ def run():
         try:
             applied = db.init_db()
             health = db.database_health()
-            check("a fresh database reaches schema version 1",
+            check("a fresh database reaches the current schema version",
                   health["schema_version"] == db.SCHEMA_VERSION, applied)
             check("a fresh database gets every table",
                   {"trades", "market_data", "risk_events", "model_versions",
@@ -219,8 +219,9 @@ def _check_migration(db, path, folder):
     before.close()
 
     applied = db.init_db()
-    check("migration 1 is applied once", applied == [{"version": 1, "name": applied[0]["name"]}], applied)
-    check("the schema version is recorded", db.schema_version() == 1)
+    check("both baseline and credential migrations are applied",
+          [item["version"] for item in applied] == [1, 2], applied)
+    check("the schema version is recorded", db.schema_version() == 2)
     check("re-running is a no-op", db.migrate() == [])
 
     after = sqlite3.connect(path)
@@ -235,6 +236,13 @@ def _check_migration(db, path, folder):
     check("users and settings rows are preserved",
           after_counts["users"] == before_counts["users"]
           and after_counts["ml_predictions"] == before_counts["ml_predictions"])
+    legacy_user = after.execute(
+        "SELECT pin, pin_hash, role FROM users WHERE username = 'legacy'"
+    ).fetchone()
+    from src.engine.credentials import verify_passphrase
+    check("legacy PIN is cleared and preserved as a scrypt hash",
+          legacy_user[0] == "" and verify_passphrase("9999", legacy_user[1])
+          and legacy_user[2] == "viewer")
     check("daily_stats is kept (legacy, not dropped)",
           after_counts["daily_stats"] == before_counts["daily_stats"])
 
@@ -292,7 +300,7 @@ def _check_migration(db, path, folder):
     db.DATABASE_PATH = second
     db._INITIALIZED.clear()
     db.init_db()
-    check("migrating a second copy yields the same version", db.schema_version() == 1)
+    check("migrating a second copy yields the same version", db.schema_version() == 2)
     db.DATABASE_PATH = path
     db._INITIALIZED.clear()
     db.init_db()
@@ -428,7 +436,7 @@ def _check_helpers(db, analytics):
     print("\nHelpers and existing queries")
     health = db.database_health()
     check("health reports the schema version and pragmas",
-          health["schema_version"] == 1 and health["foreign_keys"] is True
+          health["schema_version"] == 2 and health["foreign_keys"] is True
           and health["busy_timeout_ms"] == 5000, health)
 
     recent = db.get_recent_trades(5)

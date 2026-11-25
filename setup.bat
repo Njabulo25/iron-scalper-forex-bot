@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 where py >nul 2>nul
 if errorlevel 1 (
-    echo Python 3 is required. Install Python 3.10 or newer, then run setup.bat again.
+    echo Python 3.12 and the Python launcher are required. Install Python 3.12, then run setup.bat again.
     exit /b 1
 )
 
@@ -12,7 +12,7 @@ if not exist ".venv\Scripts\python.exe" (
     echo Creating the Iron Scalper Python environment...
     py -3.12 -m venv .venv
     if errorlevel 1 (
-        echo Could not create .venv. Install Python 3.12, then run setup.bat again.
+        echo Could not create .venv. Confirm Python 3.12 is installed, then run setup.bat again.
         exit /b 1
     )
 )
