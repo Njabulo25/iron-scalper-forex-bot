@@ -44,6 +44,7 @@ For a local network deployment, use a TLS reverse proxy with a stable `IRON_SCAL
 - Model files and their registry are stored in `models/`.
 - Use `python train_ml.py --help` to see the supported model training and history collection commands.
 - Use the dashboard's **Backtesting** page to run a walk-forward evaluation over history already stored in the database or in the configured CSV path.
+- Use `python -m src.research.web_search --symbol XAUUSD --days 3` to pull recent Exa web results with the sentences that matched. It is read-only, never becomes a trading signal, and needs `EXA_API_KEY` in the environment (see `.env.example`) plus `exa-py` from `requirements.txt`.
 - Use `python -m src.engine.auth --help` to see dashboard account commands.
 
 ## Trading controls and limits
