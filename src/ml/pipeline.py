@@ -301,7 +301,7 @@ def version_name(data_fingerprint):
     return f"{MODEL_FAMILY}-{stamp}-{data_fingerprint}"
 
 
-def train_and_save(bars, config, store_path=None, source=None):
+def train_and_save(bars, config, store_path=None, source=None, timeframe=None):
     """Build the dataset, run walk-forward, fit on all history, save one version."""
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     dataset = build_dataset(bars, config)
@@ -325,6 +325,7 @@ def train_and_save(bars, config, store_path=None, source=None):
     model.metadata = {
         "version": version,
         "family": MODEL_FAMILY,
+        "timeframe": timeframe or config.ml.timeframe,
         "trained_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "data": {
             "source": source or "data/raw history",

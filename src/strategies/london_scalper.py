@@ -5,7 +5,7 @@ from config.settings import CONFIG
 
 
 class LondonScalper:
-    """London-session EMA pullback scalper on 5-minute bars.
+    """London-session EMA pullback scalper on its configured bar timeframe.
 
     Every indicator period, band and ATR multiple comes from
     :class:`config.settings.ScalperConfig` rather than a literal in this file.

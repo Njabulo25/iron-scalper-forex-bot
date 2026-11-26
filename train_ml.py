@@ -72,16 +72,22 @@ def main():
     parser.add_argument("--train", action="store_true", help="walk-forward and save a model")
     parser.add_argument("--report", action="store_true", help="show the saved model's results")
     parser.add_argument("--monitor", action="store_true", help="show live prediction performance")
-    parser.add_argument("--data", default=CONFIG.ml.data_path, help="bar CSV to use")
+    parser.add_argument("--data", default=None, help="bar CSV to use")
     parser.add_argument("--bars", type=int, default=100_000, help="bars to request from MT5")
     parser.add_argument(
         "--store-db", action="store_true",
         help="also upsert collected bars into the market_data table",
     )
-    parser.add_argument("--timeframe", default=CONFIG.scalper.timeframe)
+    parser.add_argument("--timeframe", default=CONFIG.ml.timeframe)
     parser.add_argument("--days", type=int, default=CONFIG.ml.monitor_days)
     parser.add_argument("--out", default=CONFIG.ml.model_path)
     arguments = parser.parse_args()
+    if arguments.data is None:
+        arguments.data = (
+            CONFIG.ml.data_path
+            if arguments.timeframe == CONFIG.ml.timeframe
+            else f"data/ml/{CONFIG.mt5.symbol}_{arguments.timeframe}.csv"
+        )
 
     if not any((arguments.collect, arguments.train, arguments.report, arguments.monitor)):
         parser.print_help()
@@ -98,7 +104,7 @@ def main():
         path = Path(arguments.data)
         if not path.exists():
             # Fall back to the history that was downloaded with the project.
-            fallback = Path("data/raw/XAUUSD_M5.csv")
+            fallback = Path(f"data/raw/{CONFIG.mt5.symbol}_{arguments.timeframe}.csv")
             if not fallback.exists():
                 print(f"No bars at {path} and no fallback at {fallback}.")
                 return 2
@@ -118,7 +124,8 @@ def main():
             return 2
 
         model, report, paths = pipeline.train_and_save(
-            bars, CONFIG, store_path=arguments.out, source=str(path)
+            bars, CONFIG, store_path=arguments.out, source=str(path),
+            timeframe=arguments.timeframe,
         )
         _print_report(report)
         print(f"\nSaved model {model.metadata['version']}")

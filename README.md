@@ -48,6 +48,7 @@ For a local network deployment, use a TLS reverse proxy with a stable `IRON_SCAL
 
 ## Trading controls and limits
 
+- The scalper reads M1 bars with a five-bar spacing; the daily breakout stays on M5. The entry ceiling is 50 per day. The signal rules and risk checks can produce fewer entries, so this is not a guaranteed fill quota.
 - Position size uses MT5's account-currency stop-loss estimate, rounds down to the broker's volume step, and skips the trade if the minimum volume would exceed the configured risk budget.
 - A market-data outage, stale signal, stale quote, account/server switch, broker restriction, or failed order pre-check blocks new orders. The loop reconnects automatically and backs off up to 15 seconds after repeated exceptions.
 - **Stop engine** stops new entries; it does not close open MT5 positions. Existing positions remain at the broker with their attached SL/TP. Review or close them in MT5.

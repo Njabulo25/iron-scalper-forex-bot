@@ -258,6 +258,20 @@ class LiveTrader:
             self._publish_ml()
             return
 
+        model_timeframe = (self.gate.model.metadata or {}).get("timeframe", "M5")
+        if model_timeframe != self.config.ml.timeframe:
+            self._ml_blocked = True
+            self._ml_status.update({
+                "active": False,
+                "reason": (
+                    f"model uses {model_timeframe} bars but ml.timeframe is "
+                    f"{self.config.ml.timeframe}"
+                ),
+            })
+            self.log.error("ML model timeframe mismatch: %s", self._ml_status["reason"])
+            self._publish_ml()
+            return
+
         missing = set(FEATURE_NAMES) | set(SIGNAL_FEATURES)
         missing -= set(self.gate.model.feature_names)
         if missing:
@@ -345,7 +359,7 @@ class LiveTrader:
         if frame is None or not len(frame):
             return None
 
-        token = frame["time"].iloc[-1]
+        token = (trade.get("timeframe", self.config.ml.timeframe), frame["time"].iloc[-1])
         if token != self._feature_bar:
             self._feature_bar = token
             try:
@@ -388,14 +402,23 @@ class LiveTrader:
         if self.gate is None:
             return True, None
 
-        row = self._feature_row(trade, frame)
-        if row is None:
+        row = None
+        signal_timeframe = trade.get("timeframe", self.config.ml.timeframe)
+        if signal_timeframe != self.config.ml.timeframe:
             prediction = Prediction(
                 False, 0.0, self.config.ml.confidence_min,
-                "no feature row for this signal bar", self.gate.version,
+                f"model uses {self.config.ml.timeframe} bars; signal uses {signal_timeframe}",
+                self.gate.version,
             )
         else:
-            prediction = self.gate.decide(row)
+            row = self._feature_row(trade, frame)
+            if row is None:
+                prediction = Prediction(
+                    False, 0.0, self.config.ml.confidence_min,
+                    "no feature row for this signal bar", self.gate.version,
+                )
+            else:
+                prediction = self.gate.decide(row)
 
         key = self._signal_key(trade)
         self._ml_seen += 1
@@ -719,11 +742,8 @@ class LiveTrader:
         """
         symbol = symbol or self.config.mt5.symbol
         timeframe_name = timeframe or self.config.scalper.timeframe
-        timeframe = (
-            self.broker.timeframe(timeframe_name)
-            if timeframe is None else timeframe
-        )
-        rates = self.broker.rates(timeframe, bars)
+        timeframe_value = self.broker.timeframe(timeframe_name)
+        rates = self.broker.rates(timeframe_value, bars)
         if rates is None:
             return None
         try:
@@ -743,7 +763,7 @@ class LiveTrader:
             duration = TIMEFRAME_SECONDS.get(timeframe_name, 5 * 60)
             bar_close = bar_open + timedelta(seconds=duration)
             age = (self._server_now() - bar_close).total_seconds()
-            max_age = self.config.execution.max_signal_age_seconds
+            max_age = self.config.execution.max_signal_age_seconds + duration
             if age < -BAR_CLOCK_TOLERANCE_SECONDS:
                 self._block(
                     "future-bars",
@@ -1040,23 +1060,30 @@ class LiveTrader:
 
     # ── Signal generation ──────────────────────────────────────────
 
-    def _generate_signals(self, df):
-        """Return signals, recomputed once per closed bar instead of every pass."""
-        last_bar_time = df["time"].iloc[-1]
-        if self._last_bar_time is not None and last_bar_time == self._last_bar_time:
+    def _generate_signals(self, df, breakout_df=None):
+        """Return signals once per newly closed strategy bar."""
+        breakout_df = breakout_df if breakout_df is not None else df
+        scalper_bar = df["time"].iloc[-1] if df is not None and len(df) else None
+        breakout_bar = (
+            breakout_df["time"].iloc[-1]
+            if self.config.breakout.enabled and breakout_df is not None and len(breakout_df)
+            else None
+        )
+        bar_key = (scalper_bar, breakout_bar)
+        if self._last_bar_time is not None and bar_key == self._last_bar_time:
             return self._cached_signals
 
         upcoming = []
         server_now = self._server_now()
         offset = self._display_offset()
-        bar_duration = timedelta(
-            seconds=TIMEFRAME_SECONDS.get(self.config.scalper.timeframe, 5 * 60)
-        )
         max_age = self.config.execution.max_signal_age_seconds
 
-        if self.config.breakout.enabled:
-            strategy = DailyBreakout(df, self.config.breakout)
+        if self.config.breakout.enabled and breakout_df is not None and len(breakout_df):
+            timeframe_name = self.config.breakout.timeframe
+            bar_duration = timedelta(seconds=TIMEFRAME_SECONDS.get(timeframe_name, 5 * 60))
+            strategy = DailyBreakout(breakout_df, self.config.breakout)
             for trade in strategy.generate():
+                trade["timeframe"] = timeframe_name
                 trade["bar_close_time"] = trade["time"] + bar_duration
                 age = self._signal_age_seconds(trade, server_now)
                 if not -BAR_CLOCK_TOLERANCE_SECONDS <= age <= max_age:
@@ -1065,11 +1092,16 @@ class LiveTrader:
                     trade["time_str"] = (trade["time"] + offset).strftime("%H:%M")
                     trade["alert"] = f"Watch for {trade['type']} at {trade['time_str']} SAST"
                     upcoming.append(trade)
-                    self._store_signal(trade, self.config.breakout.symbol, "BREAKOUT")
+                    self._store_signal(
+                        trade, self.config.breakout.symbol, "BREAKOUT", timeframe_name
+                    )
 
-        if self.config.scalper.enabled:
+        if self.config.scalper.enabled and df is not None and len(df):
+            timeframe_name = self.config.scalper.timeframe
+            bar_duration = timedelta(seconds=TIMEFRAME_SECONDS.get(timeframe_name, 60))
             strategy = LondonScalper(df, self.config.scalper)
             for trade in strategy.generate():
+                trade["timeframe"] = timeframe_name
                 trade["bar_close_time"] = trade["time"] + bar_duration
                 age = self._signal_age_seconds(trade, server_now)
                 if not -BAR_CLOCK_TOLERANCE_SECONDS <= age <= max_age:
@@ -1077,19 +1109,21 @@ class LiveTrader:
                 trade["time_str"] = (trade["time"] + offset).strftime("%H:%M")
                 trade["alert"] = f"Watch for {trade['type']} at {trade['time_str']} SAST"
                 upcoming.append(trade)
-                self._store_signal(trade, self.config.scalper.symbol, "SCALPER")
+                self._store_signal(
+                    trade, self.config.scalper.symbol, "SCALPER", timeframe_name
+                )
 
         self._cached_signals = upcoming
-        self._last_bar_time = last_bar_time
+        self._last_bar_time = bar_key
         return upcoming
 
-    def _store_signal(self, trade, symbol, strategy):
+    def _store_signal(self, trade, symbol, strategy, timeframe):
         """Persist a signal; SQLite's unique index decides whether it is new."""
         try:
             inserted = log_signal(
                 symbol, strategy, trade["type"], trade["entry"], trade["sl"], trade["tp"],
                 trade["time"].strftime("%Y-%m-%d %H:%M:%S"),
-                timeframe=self.config.scalper.timeframe,
+                timeframe=timeframe,
             )
         except Exception:
             self.log.exception("Could not store signal")
@@ -1342,8 +1376,8 @@ class LiveTrader:
     def run_web(self):
         session = self.config.mt5
         self.log.info(
-            "Trading loop started (symbol %s, %s bars, %.1fs interval)",
-            session.symbol, self.config.scalper.timeframe,
+            "Trading loop started (symbol %s, scalper %s / breakout %s bars, %.1fs interval)",
+            session.symbol, self.config.scalper.timeframe, self.config.breakout.timeframe,
             self.config.execution.loop_seconds,
         )
 
@@ -1376,8 +1410,30 @@ class LiveTrader:
                 self._publish_connection(snapshot)
                 self._check_closed_positions()
 
-                frame = self.get_data(session.symbol, bars=2000)
-                signals = self._generate_signals(frame) if frame is not None else []
+                scalper_frame = (
+                    self.get_data(
+                        session.symbol, timeframe=self.config.scalper.timeframe, bars=2000
+                    )
+                    if self.config.scalper.enabled else None
+                )
+                if not self.config.breakout.enabled:
+                    breakout_frame = None
+                elif (
+                    self.config.breakout.timeframe == self.config.scalper.timeframe
+                    and self.config.breakout.symbol == session.symbol
+                    and scalper_frame is not None
+                ):
+                    breakout_frame = scalper_frame
+                else:
+                    breakout_frame = self.get_data(
+                        self.config.breakout.symbol,
+                        timeframe=self.config.breakout.timeframe,
+                        bars=2000,
+                    )
+                signals = (
+                    self._generate_signals(scalper_frame, breakout_frame)
+                    if scalper_frame is not None or breakout_frame is not None else []
+                )
 
                 # Clear old dashboard signals even while MT5 is waiting for
                 # fresh bars, and keep the quote/account snapshot current.
@@ -1388,7 +1444,10 @@ class LiveTrader:
                     age = self._signal_age_seconds(trade, server_now)
                     if not 0 <= age <= self.config.execution.max_signal_age_seconds:
                         continue
-                    allowed, _ = self._ml_decision(trade, frame)
+                    signal_frame = (
+                        breakout_frame if trade.get("strategy") == "BREAKOUT" else scalper_frame
+                    )
+                    allowed, _ = self._ml_decision(trade, signal_frame)
                     if not allowed:
                         continue
                     # The gate can only remove signals. Execution still goes

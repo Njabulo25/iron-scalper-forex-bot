@@ -31,7 +31,7 @@ class RiskConfig:
 
     risk_per_trade: float = 0.01        # Fraction of balance risked per trade
     max_daily_loss_pct: float = 0.03    # Daily loss limit, of the day's opening balance
-    max_daily_trades: int = 10
+    max_daily_trades: int = 50
     max_open_positions: int = 3
     max_consecutive_losses: int = 3     # Stop for the rest of the day at this streak
     same_direction_guard_usd: float = 5.0   # Ignore a duplicate this close to an open entry
@@ -133,6 +133,7 @@ class BreakoutConfig:
 
     enabled: bool = True
     symbol: str = "XAUUSD"
+    timeframe: str = "M5"
     asian_start: time = time(0, 0)
     asian_end: time = time(7, 0)
     session_start: time = time(7, 0)
@@ -153,6 +154,8 @@ class BreakoutConfig:
         return f"{self.asian_start:%H:%M}-{self.asian_end:%H:%M}"
 
     def validate(self):
+        if self.timeframe not in TIMEFRAMES:
+            raise ValueError(f"breakout.timeframe must be one of {', '.join(TIMEFRAMES)}")
         if self.asian_end <= self.asian_start:
             raise ValueError("breakout.asian_end must be after asian_start")
         if self.session_end <= self.session_start:
@@ -173,11 +176,11 @@ class BreakoutConfig:
 
 @dataclass(frozen=True)
 class ScalperConfig:
-    """London-session EMA pullback scalper."""
+    """London-session EMA pullback scalper, configured for one-minute bars."""
 
     enabled: bool = True
     symbol: str = "XAUUSD"
-    timeframe: str = "M5"
+    timeframe: str = "M1"
     session_start: time = time(8, 0)
     session_end: time = time(16, 0)
     atr_period: int = 14
@@ -191,7 +194,7 @@ class ScalperConfig:
     rsi_long_max: float = 70.0
     rsi_short_min: float = 30.0
     rsi_short_max: float = 60.0
-    min_bar_spacing: int = 5        # Bars between two scalper entries
+    min_bar_spacing: int = 5        # Five M1 bars between scalper entries
 
     @property
     def session(self):
@@ -234,6 +237,7 @@ class MLConfig:
     """
 
     enabled: bool = False
+    timeframe: str = "M5"
     # A calibrated probability of reaching the target before the stop. The
     # model is fitted without class re-weighting, so 0.50 is the natural
     # decision boundary and 0.60 means what it says.
@@ -250,6 +254,8 @@ class MLConfig:
     monitor_days: int = 30          # Window for live prediction monitoring
 
     def validate(self):
+        if self.timeframe not in TIMEFRAMES:
+            raise ValueError(f"ml.timeframe must be one of {', '.join(TIMEFRAMES)}")
         if not 0 <= self.confidence_min <= 1:
             raise ValueError("ml.confidence_min must be between 0 and 1")
         if self.horizon_bars < 1:
