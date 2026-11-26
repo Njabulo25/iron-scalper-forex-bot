@@ -252,7 +252,7 @@ def main():
 
     live_module.get_dashboard_snapshot = counted_snapshot
     trader.get_data = lambda *a, **k: object()
-    trader._generate_signals = lambda df: []
+    trader._generate_signals = lambda *frames: []
     trader._stop = False
     trader._last_history_scan = 0.0  # pretend the throttle window has elapsed
     live_module.time.sleep = lambda seconds: setattr(trader, "_stop", True)
@@ -269,7 +269,7 @@ def main():
 
     real_place_trade = trader.place_trade
     trader.get_data = lambda *a, **k: object()
-    trader._generate_signals = lambda df: [fresh, stale]
+    trader._generate_signals = lambda *frames: [fresh, stale]
     trader.place_trade = executed.append
     trader._stop = False
     live_module.time.sleep = lambda seconds: setattr(trader, "_stop", True)

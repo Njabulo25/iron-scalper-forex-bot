@@ -312,8 +312,19 @@ def _check_dataset(bars):
           int(dataset["finite"].sum()) > 0.9 * dataset["counts"]["signals"],
           f"{int(dataset['finite'].sum())}/{dataset['counts']['signals']}")
     check("signals are ordered by bar", np.all(np.diff(dataset["indices"]) >= 0))
-    check("both strategies are represented when enabled",
-          dataset["counts"]["scalper"] > 0, dataset["counts"])
+    matching_strategies = [
+        name for name, settings in (("scalper", TEST_CONFIG.scalper), ("breakout", TEST_CONFIG.breakout))
+        if settings.enabled and settings.timeframe == TEST_CONFIG.ml.timeframe
+    ]
+    check("only matching-timeframe strategies enter the ML dataset",
+          all(dataset["counts"][name] >= 0 for name in matching_strategies)
+          and all(dataset["counts"][name] == 0 for name in ("scalper", "breakout")
+                  if name not in matching_strategies), dataset["counts"])
+    m1_config = replace(TEST_CONFIG, ml=replace(TEST_CONFIG.ml, timeframe="M1"))
+    m1_dataset = pipeline.build_dataset(bars, m1_config)
+    check("M1 ML data contains scalper signals and excludes M5 breakout signals",
+          m1_dataset["counts"]["scalper"] > 0 and m1_dataset["counts"]["breakout"] == 0,
+          m1_dataset["counts"])
 
 
 def _check_walk_forward(bars):

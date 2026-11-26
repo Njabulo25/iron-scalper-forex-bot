@@ -237,13 +237,13 @@ class MLConfig:
     """
 
     enabled: bool = False
-    timeframe: str = "M5"
+    timeframe: str = "M1"
     # A calibrated probability of reaching the target before the stop. The
     # model is fitted without class re-weighting, so 0.50 is the natural
     # decision boundary and 0.60 means what it says.
     confidence_min: float = 0.50
     model_path: str = "models/signal_filter.json"
-    data_path: str = "data/ml/XAUUSD_M5.csv"
+    data_path: str = "data/ml/XAUUSD_M1.csv"
     horizon_bars: int = 24          # Max bars a signal is given to reach SL/TP
     embargo_bars: int = 24          # Bars dropped between train and test folds
     folds: int = 5                  # Walk-forward folds

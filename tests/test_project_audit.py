@@ -132,18 +132,53 @@ class DashboardAccessTests(unittest.TestCase):
         self.assertEqual(login.status_code, 302)
         page = client.get("/dashboard")
         next_token = re.search(rb'<meta name="csrf-token" content="([^"]+)"', page.data).group(1).decode()
-        return client, next_token
+        return client, next_token, page
 
     def test_landing_page_and_control_authorization(self):
         landing = self.dashboard.app.test_client().get("/")
         self.assertEqual(landing.status_code, 200)
-        self.assertIn(b"trading engine stopped", landing.data)
+        self.assertIn(b"Signal to execution", landing.data)
+        self.assertIn(b'href="/static/css/landing.css"', landing.data)
+        landing_style = self.dashboard.app.test_client().get("/static/css/landing.css")
+        self.assertEqual(landing_style.status_code, 200)
+        landing_style.close()
+        landing.close()
 
-        viewer, viewer_token = self._sign_in("viewer", "viewer test passphrase")
+        viewer, viewer_token, viewer_page = self._sign_in("viewer", "viewer test passphrase")
+        self.assertNotIn(b'id="btn-start"', viewer_page.data)
+        self.assertNotIn(b'id="bt-run"', viewer_page.data)
+        self.assertIn(b"Read-only viewer", viewer_page.data)
+        self.assertEqual(viewer.get("/").status_code, 200)
         denied = viewer.post("/stop", headers={"X-CSRF-Token": viewer_token})
         self.assertEqual(denied.status_code, 403)
+        denied_backtest = viewer.post("/api/backtests/run", json={}, headers={"X-CSRF-Token": viewer_token})
+        self.assertEqual(denied_backtest.status_code, 403)
+        denied_upload = viewer.post("/upload_graph", headers={"X-CSRF-Token": viewer_token})
+        self.assertEqual(denied_upload.status_code, 403)
 
-        admin, admin_token = self._sign_in("operator", "operator test passphrase")
+        admin, admin_token, admin_page = self._sign_in("operator", "operator test passphrase")
+        self.assertIn(b'id="btn-start"', admin_page.data)
+        self.assertIn(b"EMA scalper on M1 bars", admin_page.data)
+        self.assertEqual(admin.get("/landing").status_code, 200)
+        self.assertEqual(admin.get("/login").status_code, 302)
+        for asset in ("/static/css/app.css", "/static/js/app.js", "/static/js/charts.js", "/static/img/iron-scalper-mark.svg"):
+            response = admin.get(asset)
+            self.assertEqual(response.status_code, 200, asset)
+            response.close()
+        configured = admin.get("/api/config").get_json()["config"]
+        self.assertEqual(configured["scalper"]["timeframe"], "M1")
+        self.assertEqual(configured["breakout"]["timeframe"], "M5")
+        self.assertEqual(configured["ml"]["timeframe"], "M1")
+        self.assertEqual(admin.get("/api/ml").get_json()["configured"]["timeframe"], "M1")
+        for path in (
+            "/state", "/api/account", "/api/positions", "/api/health", "/api/logs",
+            "/api/performance", "/api/analytics/daily", "/api/analytics/weekly",
+            "/api/analytics/strategies", "/api/analytics/sessions", "/api/analytics/equity",
+            "/api/analytics/monthly", "/api/trades", "/api/models", "/api/backtests",
+        ):
+            response = admin.get(path)
+            self.assertEqual(response.status_code, 200, path)
+            response.close()
         missing_csrf = admin.post("/stop")
         self.assertEqual(missing_csrf.status_code, 400)
         stopped = admin.post("/stop", headers={"X-CSRF-Token": admin_token})

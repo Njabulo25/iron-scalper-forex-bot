@@ -1,117 +1,113 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#09131d">
-<title>Iron Scalper | MT5 Trading Terminal</title>
-<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}">
-<style>
-    :root { color-scheme: dark; --bg:#09131d; --panel:#101f2b; --line:#263b49; --text:#e8f0f3; --muted:#93a7b3; --mint:#5ed8cb; --gold:#ddb970; }
-    * { box-sizing:border-box; }
-    body { margin:0; background:radial-gradient(900px 520px at 78% -12%,rgba(63,164,158,.14),transparent 65%),var(--bg); color:var(--text); font-family:"Aptos","Segoe UI Variable","Inter","Segoe UI",sans-serif; }
-    a { color:inherit; text-decoration:none; }
-    .wrap { width:min(1120px,calc(100% - 48px)); margin:auto; }
-    header { height:82px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(147,167,179,.14); }
-    .brand { display:flex; align-items:center; gap:12px; }
-    .brand img { width:38px; height:38px; }
-    .brand strong { display:block; font-size:13px; letter-spacing:1.5px; }
-    .brand span { color:var(--mint); }
-    .brand small { color:var(--muted); display:block; font-size:9px; letter-spacing:1.2px; margin-top:4px; }
-    .login { border:1px solid #3a5260; border-radius:8px; color:#d8e6ea; font-size:12px; padding:10px 15px; transition:all .15s ease; }
-    .login:hover { border-color:var(--mint); color:var(--mint); }
-    .hero { display:grid; grid-template-columns:1.1fr .9fr; align-items:center; gap:66px; padding:82px 0 76px; }
-    .eyebrow { align-items:center; color:var(--mint); display:flex; font-size:10px; font-weight:700; gap:9px; letter-spacing:1.7px; text-transform:uppercase; }
-    .eyebrow:before { background:var(--mint); content:""; height:1px; width:22px; }
-    h1 { font-size:clamp(42px,6.4vw,72px); letter-spacing:-3.3px; line-height:.99; margin:22px 0 20px; max-width:690px; }
-    h1 em { color:var(--mint); font-style:normal; }
-    .intro { color:#a5b8c2; font-size:16px; line-height:1.75; margin:0; max-width:560px; }
-    .actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-top:30px; }
-    .primary,.secondary { border-radius:9px; display:inline-flex; align-items:center; font-size:13px; font-weight:700; gap:10px; padding:13px 17px; }
-    .primary { background:linear-gradient(135deg,#6de3d5,#40c5bb); color:#092128; }
-    .primary:hover { filter:brightness(1.06); }
-    .secondary { border:1px solid #314957; color:#c0cfd5; }
-    .secondary:hover { border-color:#557283; }
-    .terminal { background:linear-gradient(155deg,rgba(17,34,47,.97),rgba(11,24,35,.98)); border:1px solid #29414f; border-radius:16px; box-shadow:0 26px 70px rgba(0,0,0,.28); overflow:hidden; }
-    .terminal-head { align-items:center; border-bottom:1px solid #253a47; display:flex; justify-content:space-between; padding:15px 18px; }
-    .terminal-head small { color:#95aab5; font-size:10px; letter-spacing:1px; }
-    .live { align-items:center; color:#89d5bc; display:flex; font-size:10px; gap:7px; }
-    .live:before { background:#62d4aa; border-radius:50%; content:""; height:6px; width:6px; }
-    .terminal-body { padding:22px 18px 18px; }
-    .price-row { align-items:end; display:flex; justify-content:space-between; }
-    .price-row small,.metric small { color:var(--muted); display:block; font-size:10px; letter-spacing:.65px; text-transform:uppercase; }
-    .price { font-size:31px; font-variant-numeric:tabular-nums; letter-spacing:-1px; margin-top:8px; }
-    .change { color:#83d2b6; font-size:11px; }
-    .chart { display:block; height:128px; margin:22px 0; width:100%; }
-    .metrics { border-top:1px solid #243945; display:grid; grid-template-columns:repeat(3,1fr); padding-top:16px; }
-    .metric { border-right:1px solid #243945; padding:0 13px; }
-    .metric:first-child { padding-left:0; }
-    .metric:last-child { border:0; }
-    .metric strong { display:block; font-size:15px; margin-top:8px; }
-    .section { border-top:1px solid rgba(147,167,179,.14); padding:50px 0 66px; }
-    .section-head { align-items:end; display:flex; justify-content:space-between; gap:20px; margin-bottom:22px; }
-    .section h2 { font-size:23px; letter-spacing:-.6px; margin:0; }
-    .section-head p { color:var(--muted); font-size:12px; line-height:1.6; margin:0; max-width:390px; }
-    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:13px; }
-    .card { background:rgba(16,31,43,.74); border:1px solid #263b49; border-radius:12px; padding:20px; }
-    .card svg { fill:none; height:24px; stroke:var(--mint); stroke-linecap:round; stroke-linejoin:round; stroke-width:1.6; width:24px; }
-    .card h3 { font-size:14px; margin:18px 0 8px; }
-    .card p { color:var(--muted); font-size:12px; line-height:1.65; margin:0; }
-    .notice { align-items:flex-start; background:rgba(221,185,112,.07); border:1px solid rgba(221,185,112,.25); border-radius:10px; color:#cdbd9b; display:flex; font-size:11px; gap:12px; line-height:1.65; margin-top:16px; padding:14px 16px; }
-    .notice svg { flex:0 0 18px; fill:none; height:18px; stroke:var(--gold); stroke-width:1.7; width:18px; }
-    footer { border-top:1px solid rgba(147,167,179,.14); color:#738893; font-size:10px; padding:22px 0 26px; }
-    @media(max-width:800px) { .hero { grid-template-columns:1fr; gap:38px; padding:58px 0; } .terminal { max-width:560px; } }
-    @media(max-width:600px) { .wrap { width:min(100% - 32px,1120px); } header { height:70px; } .hero { padding:48px 0; } h1 { letter-spacing:-2.2px; } .cards { grid-template-columns:1fr; } .section-head { align-items:flex-start; flex-direction:column; } }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#09151f">
+    <meta name="description" content="Iron Scalper is a local MetaTrader 5 terminal for strategy monitoring, guarded execution, and trading operations.">
+    <title>Iron Scalper | MT5 trading terminal</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/landing.css') }}">
 </head>
 <body>
-<div class="wrap">
-    <header>
-        <a class="brand" href="/" aria-label="Iron Scalper home">
-            <img src="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}" alt="">
-            <span><strong>IRON <span>SCALPER</span></strong><small>MT5 QUANT TERMINAL</small></span>
-        </a>
-        <a class="login" href="/login">Operator sign in</a>
-    </header>
+    <div class="site-shell">
+        <header class="site-header">
+            <a class="site-brand" href="/landing" aria-label="Iron Scalper home">
+                <img src="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}" alt="">
+                <span><strong>IRON <i>SCALPER</i></strong><small>MT5 TRADING TERMINAL</small></span>
+            </a>
+            <nav class="site-nav" aria-label="Main navigation">
+                <a class="nav-anchor" href="#workflow">How it works</a>
+                {% if logged_in %}
+                <a class="nav-action" href="/dashboard">Open terminal <span aria-hidden="true">→</span></a>
+                {% else %}
+                <a class="nav-action" href="/login">Operator sign in <span aria-hidden="true">→</span></a>
+                {% endif %}
+            </nav>
+        </header>
 
-    <main>
-        <section class="hero" aria-labelledby="hero-title">
-            <div>
-                <div class="eyebrow">Rules-led XAUUSD terminal</div>
-                <h1 id="hero-title">Trade with a clear view of <em>risk.</em></h1>
-                <p class="intro">Iron Scalper connects MetaTrader 5 execution with two configurable strategies, account safeguards, and a live operations dashboard.</p>
-                <div class="actions">
-                    <a class="primary" href="/login">Open operator terminal <span aria-hidden="true">→</span></a>
-                    <a class="secondary" href="#controls">How it works</a>
+        <main>
+            <section class="hero" aria-labelledby="hero-title">
+                <div class="hero-copy">
+                    <p class="eyebrow"><span></span>Local execution · visible controls</p>
+                    <h1 id="hero-title">Trade the plan.<br>Keep <em>risk in view.</em></h1>
+                    <p class="hero-description">Iron Scalper brings MetaTrader 5, rule-based XAUUSD strategies, account safeguards, and operational status into one focused terminal.</p>
+                    <div class="hero-actions">
+                        {% if logged_in %}
+                        <a class="button button-primary" href="/dashboard">Open terminal <span aria-hidden="true">→</span></a>
+                        {% else %}
+                        <a class="button button-primary" href="/login">Operator sign in <span aria-hidden="true">→</span></a>
+                        {% endif %}
+                        <a class="button button-secondary" href="#workflow">Explore the workflow</a>
+                    </div>
+                    <ul class="trust-points" aria-label="Platform details">
+                        <li><span class="check">✓</span> Account-aware sizing</li>
+                        <li><span class="check">✓</span> Admin-controlled engine</li>
+                        <li><span class="check">✓</span> Local dashboard</li>
+                    </ul>
                 </div>
-            </div>
 
-            <div class="terminal" aria-label="Illustrative dashboard preview">
-                <div class="terminal-head"><small>XAUUSD · MARKET VIEW</small><span class="live">Feed status shown live in terminal</span></div>
-                <div class="terminal-body">
-                    <div class="price-row"><div><small>Signal and quote data</small><div class="price">From MT5</div></div><span class="change">No sample account data</span></div>
-                    <svg class="chart" viewBox="0 0 500 128" role="img" aria-label="Decorative price chart line">
-                        <defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#5ed8cb" stop-opacity=".18"/><stop offset="1" stop-color="#5ed8cb" stop-opacity="0"/></linearGradient></defs>
-                        <path d="M0 104H500M0 66H500M0 28H500" stroke="#243945" stroke-width="1"/>
-                        <path d="M0 98 29 91 52 97 78 68 103 76 128 59 152 71 180 49 207 61 232 42 257 55 286 34 312 46 338 29 365 40 393 23 421 39 449 20 477 29 500 12V128H0Z" fill="url(#chart-fill)"/>
-                        <path d="M0 98 29 91 52 97 78 68 103 76 128 59 152 71 180 49 207 61 232 42 257 55 286 34 312 46 338 29 365 40 393 23 421 39 449 20 477 29 500 12" fill="none" stroke="#5ed8cb" stroke-width="2"/>
-                    </svg>
-                    <div class="metrics"><div class="metric"><small>Execution</small><strong>MT5 linked</strong></div><div class="metric"><small>Risk controls</small><strong>Account based</strong></div><div class="metric"><small>Engine</small><strong>Operator started</strong></div></div>
+                <aside class="flow-card" aria-labelledby="flow-title">
+                    <div class="flow-card-head">
+                        <div class="product-mark" aria-hidden="true">IS</div>
+                        <div><span class="overline">SYSTEM OVERVIEW</span><strong>Signal to execution</strong></div>
+                        <span class="local-badge"><span></span>Local</span>
+                    </div>
+                    <div class="flow-intro">
+                        <h2 id="flow-title">Every order follows the same path.</h2>
+                        <p>The engine checks the feed, broker, and risk limits before it can send an order.</p>
+                    </div>
+                    <ol class="flow-steps">
+                        <li><span class="step-index">01</span><span class="step-copy"><strong>Closed market bar</strong><small>MT5 feed and freshness check</small></span><span class="step-state">INPUT</span></li>
+                        <li><span class="step-index">02</span><span class="step-copy"><strong>Strategy signal</strong><small>{{ scalper_timeframe }} scalper · {{ breakout_timeframe }} breakout</small></span><span class="step-state">RULES</span></li>
+                        <li><span class="step-index">03</span><span class="step-copy"><strong>Risk and broker checks</strong><small>Spread · stop · size · exposure</small></span><span class="step-state">GUARDS</span></li>
+                        <li><span class="step-index">04</span><span class="step-copy"><strong>Order and audit record</strong><small>Fill details saved for review</small></span><span class="step-state">MT5</span></li>
+                    </ol>
+                    <div class="flow-card-foot">
+                        <span>Daily entry ceiling</span><strong>{{ max_daily_trades }}</strong>
+                        <span class="foot-note">Configured limit · valid signals may be fewer</span>
+                    </div>
+                </aside>
+            </section>
+
+            <section class="workflow" id="workflow" aria-labelledby="workflow-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow"><span></span>One connected workflow</p><h2 id="workflow-title">Built to make each step clear.</h2></div>
+                    <p>See what the strategies are doing, what the account allows, and why an entry was accepted or blocked.</p>
                 </div>
-            </div>
-        </section>
+                <div class="feature-grid">
+                    <article class="feature-card">
+                        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V5m0 14h16M7 15l4-4 3 2 5-7"/><path d="M15 6h4v4"/></svg></span>
+                        <span class="feature-number">01 / STRATEGIES</span>
+                        <h3>Signals with context</h3>
+                        <p>Review the EMA pullback scalper and Asian-range breakout with their configured timeframes and sessions.</p>
+                    </article>
+                    <article class="feature-card">
+                        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 19 6v5.3c0 4.1-2.7 7.4-7 9.7-4.3-2.3-7-5.6-7-9.7V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+                        <span class="feature-number">02 / SAFEGUARDS</span>
+                        <h3>Checks before execution</h3>
+                        <p>Stale data, broker restrictions, wide spreads, invalid stops, and risk limits can stop a new entry.</p>
+                    </article>
+                    <article class="feature-card">
+                        <span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/><path d="M3 7v14h14"/></svg></span>
+                        <span class="feature-number">03 / OPERATIONS</span>
+                        <h3>Live state and records</h3>
+                        <p>Track connection health, positions, fills, risk decisions, model status, and stored trade history.</p>
+                    </article>
+                </div>
+            </section>
 
-        <section class="section" id="controls" aria-labelledby="controls-title">
-            <div class="section-head"><h2 id="controls-title">One terminal for the full trading loop</h2><p>Signals pass through data freshness, broker readiness, spread, position sizing, and daily risk checks before an order can be sent.</p></div>
-            <div class="cards">
-                <article class="card"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5m0 14h16M7 15l4-4 3 2 5-7"/><path d="M15 6h4v4"/></svg><h3>Strategy visibility</h3><p>Review the configured Asian breakout and EMA pullback settings alongside real account and position data.</p></article>
-                <article class="card"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 19 6v5.3c0 4.1-2.7 7.4-7 9.7-4.3-2.3-7-5.6-7-9.7V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg><h3>Guarded execution</h3><p>Stale quotes, invalid stops, excessive spread, broker errors, and risk limits block new entries.</p></article>
-                <article class="card"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/><path d="M3 7v14h14"/></svg><h3>Research and records</h3><p>Use stored trade history, operational events, market bars, model versions, and walk-forward backtests.</p></article>
-            </div>
-            <div class="notice"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2L12 3Z"/><path d="M12 9v5m0 3h.01"/></svg><span>The dashboard starts with the trading engine stopped. Only an administrator can start it, after verifying the MetaTrader account and symbol. The preview above is decorative and contains no market values.</span></div>
-        </section>
-    </main>
-    <footer>Leveraged forex and CFD trading can result in substantial losses. Historical results do not predict future performance.</footer>
-</div>
+            <section class="control-note" aria-label="Engine control">
+                <div class="control-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 20 7v5c0 4.4-3.1 7.8-8 9-4.9-1.2-8-4.6-8-9V7l8-4Z"/><path d="M12 8v4m0 4h.01"/></svg></div>
+                <div><strong>Trading starts only when an administrator starts the engine.</strong><p>Until MT5 is connected, account values and quotes are shown as unavailable. This page uses no sample trading results.</p></div>
+                {% if logged_in %}<a href="/dashboard">Go to terminal <span aria-hidden="true">→</span></a>{% else %}<a href="/login">Sign in <span aria-hidden="true">→</span></a>{% endif %}
+            </section>
+        </main>
+
+        <footer class="site-footer">
+            <a class="footer-brand" href="/landing">IRON <i>SCALPER</i></a>
+            <span>Leveraged forex and CFD trading involves substantial risk. Historical results do not predict future performance.</span>
+        </footer>
+    </div>
 </body>
 </html>

@@ -1,9 +1,10 @@
 """Dataset assembly, walk-forward validation and model versioning.
 
-The dataset is built from the strategy's *own* signals on MT5 bars: for every
-bar where the scalper or the breakout would have entered, the features at that
-bar are paired with the label produced by replaying that trade's stop and
-target. Timeouts never enter training.
+The dataset is built from the strategy's *own* signals on MT5 bars. Only
+strategies configured for the model timeframe are included, so an M1 scalper
+is never labeled on M5 bars (or vice versa). Features are paired with labels
+produced by replaying each signal's stop and target. Timeouts never enter
+training.
 
 Walk-forward is the only validation used, because a random split would leak:
 adjacent 5-minute signals share most of their feature window and their outcome
@@ -40,11 +41,11 @@ def build_dataset(bars, config):
     names = list(FEATURE_NAMES) + list(SIGNAL_FEATURES)
 
     samples = []
-    for strategy, generator, settings in (
-        ("SCALPER", scalper_signals, config.scalper),
-        ("BREAKOUT", breakout_signals, config.breakout),
+    for strategy, generator, settings, timeframe in (
+        ("SCALPER", scalper_signals, config.scalper, config.scalper.timeframe),
+        ("BREAKOUT", breakout_signals, config.breakout, config.breakout.timeframe),
     ):
-        if not settings.enabled:
+        if not settings.enabled or timeframe != config.ml.timeframe:
             continue
         side = generator(bars, features, config)
         stop_loss, take_profit = signal_geometry(bars, side, config, strategy)
@@ -64,7 +65,10 @@ def build_dataset(bars, config):
 
     samples.sort(key=lambda item: (item["index"], item["strategy"]))
     if not samples:
-        raise ValueError("the configured strategies produced no signals on this history")
+        raise ValueError(
+            "no enabled strategy on the configured ML timeframe "
+            f"({config.ml.timeframe}) produced signals on this history"
+        )
 
     matrix = np.zeros((len(samples), len(names)), dtype=np.float64)
     for row, sample in enumerate(samples):
@@ -358,6 +362,7 @@ def train_and_save(bars, config, store_path=None, source=None, timeframe=None):
     registry_path = store.parent / "registry.json"
     entry = {
         "version": version,
+        "timeframe": model.metadata["timeframe"],
         "path": str(store).replace("\\", "/"),
         "trained_at": model.metadata["trained_at"],
         "data": model.metadata["data"],

@@ -56,6 +56,9 @@
     }
     .foot { border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px;
         line-height: 1.6; margin-top: 24px; padding-top: 14px; }
+    .back-home { color: var(--muted); display: inline-block; font-size: 11px; margin-top: 16px; text-decoration: none; }
+    .back-home:hover { color: var(--accent); }
+    .back-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 </style>
 </head>
 <body>
@@ -77,6 +80,7 @@
             Session data stays on this machine. Trading decisions are made by the
             engine, not by this page.
         </p>
+        <a class="back-home" href="/landing">← Back to Iron Scalper</a>
     </main>
 </body>
 </html>

@@ -14,13 +14,13 @@
 <div class="scrim" id="scrim" data-close-nav></div>
 
 <aside class="sidebar" id="sidebar">
-    <div class="brand">
+    <a class="brand" href="/landing" aria-label="Iron Scalper landing page">
         <img class="brand-mark" src="{{ url_for('static', filename='img/iron-scalper-mark.svg') }}" alt="">
         <div class="brand-text">
             <strong>IRON <span>SCALPER</span></strong>
             <span>QUANT TRADING TERMINAL</span>
         </div>
-    </div>
+    </a>
 
     <nav class="nav" id="nav">
         <p class="nav-group">Overview</p>
@@ -76,7 +76,7 @@
             <span class="user-avatar">{{ username[0]|upper }}</span>
             <div>
                 <strong>{{ username }}</strong>
-                <span>Terminal operator</span>
+                <span>{{ role_label }}</span>
             </div>
             <form method="post" action="/logout" class="logout-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
@@ -102,10 +102,14 @@
                 <span class="chip-dot"></span><span id="mt5-chip-text">MT5 idle</span>
             </span>
             <span class="badge badge-stopped" id="engine-badge">Stopped</span>
+            {% if role == 'admin' %}
             <div class="btn-group">
                 <button class="btn btn-primary" id="btn-start">Start engine</button>
                 <button class="btn btn-danger" id="btn-stop" disabled>Stop</button>
             </div>
+            {% else %}
+            <span class="viewer-chip" title="This account can view the terminal but cannot start or stop the engine">Read only</span>
+            {% endif %}
         </div>
     </header>
 
@@ -536,8 +540,8 @@
                 </header>
                 <div class="table-wrap">
                     <table class="table" id="training-versions">
-                        <thead><tr><th>Version</th><th>Trained</th><th class="right">Bars</th><th class="right">Signals</th><th class="right">Accuracy</th><th class="right">AUC</th><th>State</th></tr></thead>
-                        <tbody><tr><td colspan="7" class="empty">No model versions recorded</td></tr></tbody>
+                        <thead><tr><th>Version</th><th>Timeframe</th><th>Trained</th><th class="right">Bars</th><th class="right">Signals</th><th class="right">Accuracy</th><th class="right">AUC</th><th>State</th></tr></thead>
+                        <tbody><tr><td colspan="8" class="empty">No model versions recorded</td></tr></tbody>
                     </table>
                 </div>
             </article>
@@ -568,13 +572,17 @@
         <section class="page" id="page-backtesting">
             <article class="panel">
                 <header class="panel-head">
-                    <div><h2>Walk-forward run</h2><p>Re-simulates both strategies on stored M5 bars, fold by fold</p></div>
+                    <div><h2>Walk-forward run</h2><p>Evaluates {{ backtest_strategy_label }} on {{ backtest_timeframe }} bars, fold by fold</p></div>
                 </header>
                 <div class="filters">
                     <label>From <input type="date" id="bt-start"></label>
                     <label>To <input type="date" id="bt-end"></label>
                     <label>Label <input type="text" id="bt-label" placeholder="e.g. pre-deployment check" maxlength="80"></label>
-                    <button class="btn btn-primary btn-sm" id="bt-run">Run backtest</button>
+                    {% if role == 'admin' %}
+                        <button class="btn btn-primary btn-sm" id="bt-run">Run backtest</button>
+                    {% else %}
+                        <span class="role-hint">Administrator access is required to run a backtest.</span>
+                    {% endif %}
                 </div>
                 <p class="panel-note" id="bt-status">No run started in this session.</p>
                 <div id="bt-result" hidden></div>
@@ -664,12 +672,16 @@
         <section class="page" id="page-graph">
             <article class="panel">
                 <header class="panel-head"><div><h2>Chart image</h2><p>Image measurements only; no price direction or trade signal</p></div></header>
+                {% if role == 'admin' %}
                 <form id="graph-form" class="upload">
                     <input id="graph-file" type="file" name="file" accept="image/png,image/jpeg" required>
                     <button class="btn btn-primary btn-sm" type="submit">Analyse chart</button>
                 </form>
                 <img id="graph-preview" class="graph-preview" alt="Uploaded chart preview" hidden>
                 <dl class="detail-list detail-grid" id="graph-result"></dl>
+                {% else %}
+                <p class="panel-note role-hint">This viewer account is read only. An administrator can upload an image for brightness and contrast measurements.</p>
+                {% endif %}
             </article>
         </section>
 
@@ -681,7 +693,7 @@
                     <li><span>1</span>Install Python 3.12 and MetaTrader 5 for Windows, then sign in to MT5.</li>
                     <li><span>2</span>Double-click <code>run.bat</code>. The first run creates the Python environment and installs dependencies.</li>
                     <li><span>3</span>Open <code>http://127.0.0.1:5000</code> and sign in to the terminal.</li>
-                    <li><span>4</span>Check the account, symbol and risk settings, then choose <strong>Start engine</strong>.</li>
+                    <li><span>4</span>Check the account, symbol and risk settings. {% if role == 'admin' %}Then choose <strong>Start engine</strong>.{% else %}An administrator must choose <strong>Start engine</strong>.{% endif %}</li>
                     <li><span>5</span>If MT5 reports <code>Terminal: Authorization failed</code>, verify the trading account number and exact broker server (not the MQL5 Community login). In <strong>Tools → Options → Expert Advisors</strong>, clear <code>Disable automated trading via external Python API</code> only if you intend to let Python place orders. Use <code>IRON_SCALPER_MT5_LOGIN</code>, <code>IRON_SCALPER_MT5_SERVER</code> and, if needed, <code>IRON_SCALPER_MT5_PATH</code> to select the saved account and terminal.</li>
                 </ol>
                 <p class="panel-note">The dashboard stays stopped until you start the engine. Trade history and model results are read from <code>data/iron_scalper.db</code>.</p>

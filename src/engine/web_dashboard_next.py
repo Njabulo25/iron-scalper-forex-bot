@@ -174,6 +174,9 @@ def _json_field(row, name, default=None):
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Display the login form and establish an authenticated session."""
+    if request.method == 'GET' and session.get("logged_in") is True:
+        return redirect('/dashboard')
+
     error = None
     setup_hint = None
     if database.user_count() == 0:
@@ -215,16 +218,35 @@ def logout():
 
 
 @app.route('/')
+@app.route('/landing')
 def landing():
-    if session.get("logged_in") is True:
-        return redirect('/dashboard')
-    return render_template('landing.html')
+    return render_template(
+        'landing.html',
+        logged_in=session.get("logged_in") is True,
+        username=session.get("username", ""),
+        scalper_timeframe=CONFIG.scalper.timeframe,
+        breakout_timeframe=CONFIG.breakout.timeframe,
+        max_daily_trades=CONFIG.risk.max_daily_trades,
+    )
 
 
 @app.route('/dashboard')
 @login_required
 def index():
-    return render_template('index.html', username=session.get('username', 'User'))
+    role = session.get('role', 'viewer')
+    backtest_strategies = []
+    if CONFIG.scalper.enabled and CONFIG.scalper.timeframe == CONFIG.ml.timeframe:
+        backtest_strategies.append('EMA scalper')
+    if CONFIG.breakout.enabled and CONFIG.breakout.timeframe == CONFIG.ml.timeframe:
+        backtest_strategies.append('Asian breakout')
+    return render_template(
+        'index.html',
+        username=session.get('username', 'User'),
+        role=role,
+        role_label='Administrator' if role == 'admin' else 'Read-only viewer',
+        backtest_timeframe=CONFIG.ml.timeframe,
+        backtest_strategy_label=' + '.join(backtest_strategies) or 'no matching strategy',
+    )
 
 
 # ── control ────────────────────────────────────────────────────────
@@ -595,6 +617,7 @@ def api_ml():
         "monitor": live,
         "configured": {
             "enabled": CONFIG.ml.enabled,
+            "timeframe": CONFIG.ml.timeframe,
             "confidence_min": CONFIG.ml.confidence_min,
             "model_path": CONFIG.ml.model_path,
             "horizon_bars": CONFIG.ml.horizon_bars,
@@ -627,12 +650,19 @@ def api_models():
     registry_path = Path(os.path.dirname(CONFIG.ml.model_path)) / "registry.json"
     try:
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        registry_versions = {
+            entry.get("version"): entry for entry in registry.get("versions", [])
+        }
+        for row in versions:
+            entry = registry_versions.get(row.get("version"), {})
+            row["timeframe"] = entry.get("timeframe")
         known_versions = {row.get("version") for row in versions}
         for entry in registry.get("versions", []):
             if entry.get("version") in known_versions:
                 continue
             versions.append({
                 "version": entry.get("version"),
+                "timeframe": entry.get("timeframe"),
                 "created_at": entry.get("trained_at"),
                 "data": entry.get("data") or {},
                 "samples": entry.get("samples") or {},
@@ -677,6 +707,7 @@ def api_models():
         "configured": {
             "enabled": CONFIG.ml.enabled,
             "confidence_min": CONFIG.ml.confidence_min,
+            "timeframe": CONFIG.ml.timeframe,
             "data_path": CONFIG.ml.data_path,
             "folds": CONFIG.ml.folds,
             "horizon_bars": CONFIG.ml.horizon_bars,
@@ -764,7 +795,7 @@ def _run_backtest(job_id, label, start, end):
     from src.ml import pipeline
 
     try:
-        bars, source = _stored_bars(CONFIG.mt5.symbol, CONFIG.scalper.timeframe or "M5")
+        bars, source = _stored_bars(CONFIG.mt5.symbol, CONFIG.ml.timeframe)
         bars = _slice_bars(bars, start, end)
         if len(bars) < 300:
             raise ValueError(f"only {len(bars)} bars in this window; a walk-forward needs at least 300")
@@ -783,9 +814,12 @@ def _run_backtest(job_id, label, start, end):
 
         run_id = database.record_backtest_result(
             label or "walk-forward",
-            "SCALPER+BREAKOUT",
+            "+".join(
+                strategy for strategy in ("SCALPER", "BREAKOUT")
+                if int(dataset["counts"].get(strategy.lower(), 0)) > 0
+            ),
             CONFIG.mt5.symbol,
-            "M5",
+            CONFIG.ml.timeframe,
             data_start=window_start,
             data_end=window_end,
             parameters={
@@ -795,6 +829,11 @@ def _run_backtest(job_id, label, start, end):
                 "horizon_bars": CONFIG.ml.horizon_bars,
                 "embargo_bars": CONFIG.ml.embargo_bars,
                 "threshold": CONFIG.ml.confidence_min,
+                "timeframe": CONFIG.ml.timeframe,
+                "strategies": {
+                    "SCALPER": int(dataset["counts"].get("scalper", 0)),
+                    "BREAKOUT": int(dataset["counts"].get("breakout", 0)),
+                },
                 "requested_start": start,
                 "requested_end": end,
             },
@@ -911,7 +950,7 @@ def api_backtest_run():
 # ── chart upload ──────────────────────────────────────────────────
 
 @app.route('/upload_graph', methods=['POST'])
-@login_required
+@admin_required
 def upload_graph():
     """Save an uploaded chart image and return its basic analysis."""
     if 'file' not in request.files or not request.files['file'].filename:

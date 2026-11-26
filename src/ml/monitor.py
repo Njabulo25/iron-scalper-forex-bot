@@ -17,6 +17,7 @@ reported as a count, never as if they had been traded.
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 
@@ -148,7 +149,7 @@ def summary(days=30):
 def latest_model(registry_path="models/registry.json"):
     """The newest saved version's metadata, for display when the engine is off."""
     try:
-        payload = json.loads(open(registry_path, encoding="utf-8").read())
+        payload = json.loads(Path(registry_path).read_text(encoding="utf-8"))
     except Exception:
         return {}
     versions = payload.get("versions") or []

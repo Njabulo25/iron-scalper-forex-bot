@@ -423,7 +423,7 @@
             ['rsi_short_min', 'Short RSI min'], ['rsi_short_max', 'Short RSI max'], ['min_bar_spacing', 'Bars between entries']
         ]));
         detailList('breakout-details', configRows(config.breakout, [
-            ['symbol', 'Symbol'], ['asian_session', 'Asian range'], ['session', 'Entry session'], ['min_asian_bars', 'Minimum range bars'],
+            ['symbol', 'Symbol'], ['timeframe', 'Timeframe'], ['asian_session', 'Asian range'], ['session', 'Entry session'], ['min_asian_bars', 'Minimum range bars'],
             ['atr_period', 'ATR period'], ['atr_multiplier', 'Entry distance (ATR)'], ['min_range', 'Minimum range'],
             ['sl_range_pct', 'Stop distance (% of range)', function (v) { return pct(v, true); }], ['tp_rr', 'Target (R multiple)']
         ]));
@@ -451,7 +451,7 @@
         ])));
         var enabled = !!(config.ml && config.ml.enabled);
         detailList('ml-summary', configRows(config.ml, [
-            ['enabled', 'Gate enabled'], ['confidence_min', 'Minimum confidence', function (v) { return pct(v, true); }],
+            ['enabled', 'Gate enabled'], ['timeframe', 'Model timeframe'], ['confidence_min', 'Minimum confidence', function (v) { return pct(v, true); }],
             ['model_path', 'Model path'], ['data_path', 'Training data path'], ['horizon_bars', 'Outcome horizon (bars)'],
             ['embargo_bars', 'Embargo (bars)'], ['folds', 'Walk-forward folds'], ['monitor_days', 'Live monitor window (days)']
         ]));
@@ -592,9 +592,11 @@
         setText('ml-threshold', isNum(configured.confidence_min) ? pct(configured.confidence_min, true) : pct(registry.threshold, true));
         setText('ml-gate-state', status.active ? 'Gate active in engine' : configured.enabled ? 'Configured; engine not active' : 'Disabled in configuration');
         var banner = $('#ml-banner');
-        if (banner) banner.textContent = registry.version
-            ? 'Out-of-sample results come from the saved model registry. Live outcomes below come from resolved database predictions.'
-            : 'No model registry entry is available. Train a model to record accuracy, confidence and comparison results.';
+        if (banner) banner.textContent = configured.enabled && status.reason
+            ? 'ML gate is not active: ' + status.reason
+            : registry.version
+                ? 'Out-of-sample results come from the saved model registry. Live outcomes below come from resolved database predictions.'
+                : 'No model registry entry is available. Train a model to record accuracy, confidence and comparison results.';
         var bands = oos.confidence_bands || [];
         chartBars('ml-bands', bands.map(function (row) { return row.band; }), [
             { name: 'Win rate', values: bands.map(function (row) { return Number(row.win_rate || 0) * 100; }), color: '#57d5ca' }
@@ -623,6 +625,7 @@
             ['Bars', number(registry.data && registry.data.bars, 0)], ['Signals', number(registry.samples && registry.samples.signals, 0)],
             ['Trainable signals', number(registry.samples && registry.samples.trainable, 0)],
             ['Walk-forward folds', number(registry.out_of_sample && registry.out_of_sample.folds_scored, 0)],
+            ['Model timeframe', configured.timeframe],
             ['Threshold', isNum(configured.confidence_min) ? pct(configured.confidence_min, true) : pct(registry.threshold, true)],
             ['Model file', configured.model_path || registry.path]
         ].filter(function (item) { return item[1] !== undefined && item[1] !== null && item[1] !== ''; }));
@@ -636,12 +639,12 @@
             var oos = row.out_of_sample || {};
             var classification = oos.classification || {};
             var samples = row.samples || {};
-            return '<tr><td class="mono">' + esc(row.version || '—') + '</td><td>' + esc(dateText(row.created_at || row.trained_at, true)) + '</td>' +
+            return '<tr><td class="mono">' + esc(row.version || '—') + '</td><td>' + esc(row.timeframe || '—') + '</td><td>' + esc(dateText(row.created_at || row.trained_at, true)) + '</td>' +
                 '<td class="right mono">' + number((row.data || {}).bars, 0) + '</td><td class="right mono">' + number(samples.signals, 0) + '</td>' +
                 '<td class="right mono">' + (isNum(classification.accuracy) ? pct(classification.accuracy, true) : '—') + '</td>' +
                 '<td class="right mono">' + number(classification.auc, 3) + '</td><td>' +
                 tag(row.is_active ? 'Active' : row.registry_only ? 'Registry' : 'Archived', row.is_active ? 'on' : row.registry_only ? 'warn' : 'off') + '</td></tr>';
-        }), 'No model versions recorded in the database', 7);
+        }), 'No model versions recorded in the database', 8);
         var runs = payload.runs || [];
         tableRows('training-runs', runs.map(function (row) {
             var metrics = row.metrics || {};
